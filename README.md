@@ -1,4 +1,4 @@
-# AI Trading Platform — Crypto Engine
+# AI Crypto Trading
 
 An experimental AI-driven cryptocurrency trading engine with neural decision processing and Coinbase integration.
 

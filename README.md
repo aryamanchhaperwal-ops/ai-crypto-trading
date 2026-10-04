@@ -1,16 +1,18 @@
-![Stonkfly: a pixel fly beside a candlestick chart](assets/stonkfly.png)
+# AI Trading Platform — Crypto Engine
 
-# Stonkfly
+An experimental AI-driven cryptocurrency trading engine with neural decision processing and Coinbase integration.
 
-A fly-connectome simulation that can operate a crypto trading account. Actual neural output, actual Coinbase integration. Profitable learning has not been demonstrated.
+## Overview
 
-**How it works:** Public Coinbase prices become an RGB chart. It stimulates 3,335 brightness inputs and 811 R8 color inputs in the retained **MaleCNS v1.0 graph: 166,700 neurons, 25.6 million connections**. A fixed neural readout proposes buy, sell or hold. A custom **Coinbase AgentKit ActionProvider** checks limits and places spot orders through Coinbase Advanced.
+The engine converts public Coinbase price observations into an RGB chart and presents it to a retained MaleCNS v1.0 neural graph containing 166,700 neurons and 25.6 million connections. A fixed neural readout proposes buy, sell, or hold. An execution guard checks limits and may reject a proposal; it does not replace it with a different trade.
 
-Positive portfolio P&L stimulates 15 identified PAM11 dopamine cells; negative P&L stimulates two PPL101 aversive dopamine cells. A candidate memory rule changes existing KC-to-MBON connections. These are engineered reinforcement signals, **not modeled pain receptors**. Synaptic changes do not establish that it learns to trade profitably. [Model and evidence](docs/model.md).
+Positive portfolio P&L stimulates identified PAM11 dopamine cells, while negative P&L stimulates PPL101 cells. A candidate memory rule adjusts existing KC-to-MBON connections. These are engineered reinforcement signals, not modeled pain receptors. Synaptic changes do not demonstrate profitable learning. See [model and evidence](docs/model.md).
 
-## Run it
+The browser dashboard is read-only. It displays recorded neural activity, the visual input, trading decisions, portfolio data, and charts from a run directory. It does not place orders or change trading state.
 
-Python 3.11, a C++17 compiler, macOS/Linux. Allow several GB for the dataset and dependencies; 16 GB RAM recommended.
+## Install and run
+
+Python 3.11 and a C++17 compiler are required. Allow several GB for the dataset, dependencies, derived data, and checkpoints; 16 GB RAM is recommended.
 
 ```sh
 python3.11 -m venv .venv
@@ -20,20 +22,30 @@ python -m stonkfly prepare
 python -m stonkfly run
 ```
 
-Default: **paper trades, real public BTC-USDC data, $100 simulated balance**. No key needed. Local logs, sensory images and resumable brain state go in `runs/paper/`. Ctrl-C stops it; the same command resumes.
+The default is paper trading with real public BTC-USDC prices and a simulated 100 USDC balance. No API key is needed. Runtime logs, sensory images, and resumable neural state are stored locally in `runs/paper/`. Press Ctrl-C to stop; running the same command resumes the run.
 
-For real orders, first create a dedicated Coinbase Advanced portfolio with **at most 100 USDC** and a portfolio-scoped **ECDSA API key with View + Trade, no Transfer**. Copy `.env.example` to `.env`, fill it in locally, then run these commands yourself:
+To view recorded paper activity, start the read-only dashboard in a second terminal:
+
+```sh
+python dashboard/server.py runs/paper
+```
+
+Open `http://127.0.0.1:8765` in a browser. Dashboard configuration is described in [operations](docs/operations.md).
+
+## Live trading
+
+Live orders are opt-in and require local credentials. Create a dedicated Coinbase Advanced portfolio with **at most 100 USDC** and a portfolio-scoped **ECDSA API key with View + Trade, no Transfer**. Copy `.env.example` to `.env`, fill it in locally, and run:
 
 ```sh
 python -m stonkfly run --live --preflight-only
 python -m stonkfly run --live
 ```
 
-Defaults: $10 maximum order including reserved fees, 24 attempts/day, no shorts or leverage. A $20 drawdown stops new orders; **it does not liquidate holdings or cap further losses**. [Operation and recovery](docs/operations.md).
+Defaults include a $10 maximum order (including reserved fees), 24 attempts per day, and no shorts or leverage. A $20 drawdown stops new orders; **it does not liquidate holdings or cap further losses**. Review [operation and recovery guidance](docs/operations.md) before enabling live execution.
 
 ```sh
 python -m stonkfly status
 python -m pytest -q
 ```
 
-The repo does not come funded or connected to anyone’s account. Live execution needs your local credentials and explicit opt-in.
+The project is not funded or connected to anyone's account. Live execution requires your own local credentials and explicit opt-in.

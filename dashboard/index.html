@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060a13">
+<script>
+// Apply the saved day/night theme before first paint so the page never flashes dark.
+// ?theme=light|dark in the URL wins (shareable, screenshot-friendly); otherwise the saved choice.
+try {
+  const t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('stonkfly-theme');
+  if (t === 'light') document.documentElement.dataset.theme = 'light';
+} catch (e) {}
+</script>
+<title></title>
+<style>
+:root{
+  --bg:#060a13;--panel:#0d1422;--panel2:#111a2c;--line:#1c2840;--text:#dde6f6;--mute:#7c89a3;
+  --buy:#2fd18a;--sell:#ff5d6c;--hold:#8f99ad;--cyan:#3cc8ff;--violet:#a98bff;--amber:#ffb347;--pink:#ff7ab8;--hot:#ffd166;
+}
+*{box-sizing:border-box}
+:root{color-scheme:dark}
+html,body{background:var(--bg);color:var(--text)}
+body{margin:0;padding-block:16px;padding-inline:16px;font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1440px;margin:0 auto}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 20px;margin-bottom:12px}
+.identity{display:flex;flex-direction:column;line-height:1.3}
+.identity strong{font-size:14px;letter-spacing:.04em}
+.identity span{color:var(--mute);font-size:11px}
+.stat{color:var(--mute);font-size:13px}
+.stat strong{color:var(--text);font-variant-numeric:tabular-nums}
+.pill{display:inline-block;padding:1px 9px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;margin-bottom:14px}
+.flow .st{flex:1 1 150px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12.5px;color:var(--mute);transition:border-color .3s,box-shadow .3s,color .3s;text-wrap:pretty}
+.flow .st b{display:block;color:var(--text);font-size:13.5px;margin-bottom:2px}
+.flow .st.fb{border-style:dashed}
+.flow .st.lit{border-color:var(--cyan);box-shadow:0 0 18px rgba(60,200,255,.35);color:var(--text)}
+.flow .st.fb.lit-reward{border-color:var(--buy);box-shadow:0 0 18px rgba(47,209,138,.45)}
+.flow .st.fb.lit-aversive{border-color:var(--sell);box-shadow:0 0 18px rgba(255,93,108,.45)}
+.grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:14px}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
+.card h2{font-size:14px;margin:0 0 2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;text-wrap:balance}
+.card .sub{color:var(--mute);font-size:12.5px;margin:0 0 8px;text-wrap:pretty}
+.brainbox{position:relative;width:100%;aspect-ratio:4/3;max-width:100%;border-radius:8px;overflow:hidden;background:#04070e;cursor:grab;touch-action:none}
+.brainbox canvas{position:absolute;inset:0;width:100%;height:100%}
+.brainbox.fx-reward{animation:flashG 2.2s ease-out}
+.brainbox.fx-aversive{animation:flashR 2.2s ease-out}
+@keyframes flashG{12%{box-shadow:0 0 40px 6px rgba(47,209,138,.6),inset 0 0 90px rgba(47,209,138,.45)}100%{box-shadow:none}}
+@keyframes flashR{12%{box-shadow:0 0 40px 6px rgba(255,93,108,.6),inset 0 0 90px rgba(255,93,108,.45)}100%{box-shadow:none}}
+.tools{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:4px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+button,a{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+button{transition:background-color .15s,border-color .15s,color .15s}
+button:hover{background:#18243c;border-color:#2e4064}
+button:active{background:#1d2b47}
+button:focus-visible,a:focus-visible,.brainbox:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+#flies a{text-decoration:none}
+#flies a:hover{text-decoration:underline}
+button.on{border-color:var(--cyan);color:var(--cyan)}
+button.accent{border-color:var(--hot);color:var(--hot)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--mute);margin-top:6px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+#tip{position:absolute;pointer-events:none;background:rgba(8,12,22,.94);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;display:none;white-space:nowrap;z-index:2}
+.eyebox{position:relative;width:100%;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#000}
+.eyebox canvas{position:absolute;inset:0;width:100%;height:100%}
+.decision{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.big{font-size:34px;font-weight:800;letter-spacing:.05em;line-height:1;display:inline-block}
+.big.BUY{color:var(--buy)}.big.SELL{color:var(--sell)}.big.HOLD{color:var(--hold)}
+/* A vetoed proposal never traded: dim and strike the side so it is not read as a fill. */
+.big.vetoed{opacity:.5;text-decoration:line-through;text-decoration-thickness:3px}
+.exec strong.veto{color:var(--amber)}
+.big.pop{animation:pop 1s ease-out}
+@keyframes pop{0%{transform:scale(.55);opacity:.3}35%{transform:scale(1.28);text-shadow:0 0 28px currentColor}100%{transform:scale(1);text-shadow:0 0 8px currentColor}}
+.card.glow-BUY{animation:cardG 2.4s ease-out}.card.glow-SELL{animation:cardR 2.4s ease-out}.card.glow-HOLD{animation:cardH 2s ease-out}
+@keyframes cardG{15%{box-shadow:0 0 36px rgba(47,209,138,.55);border-color:var(--buy)}}
+@keyframes cardR{15%{box-shadow:0 0 36px rgba(255,93,108,.55);border-color:var(--sell)}}
+@keyframes cardH{15%{box-shadow:0 0 24px rgba(143,153,173,.35)}}
+.exec{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums}
+.exec strong{color:var(--text)}
+.bars{margin-top:10px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 10px;align-items:center;font-size:12.5px}
+.bar{height:10px;background:#18223a;border-radius:6px;overflow:hidden}
+.bar>div{height:100%;border-radius:6px;transition:width .9s cubic-bezier(.2,.8,.2,1),background .4s;box-shadow:0 0 10px currentColor}
+.num{font-variant-numeric:tabular-nums;text-align:right;min-width:58px}
+.rule{font-size:12px;color:var(--mute);margin-top:8px;border-top:1px solid var(--line);padding-top:8px;text-wrap:pretty}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:14px}
+svg{display:block;width:100%;height:auto}
+.axis{fill:var(--mute);font-size:14px;font-variant-numeric:tabular-nums}
+.scbars{display:grid;grid-template-columns:minmax(0,11em) minmax(0,1fr) auto;gap:3px 8px;align-items:center;font-size:12px}
+.scbars .bar{height:8px}
+.foot{color:var(--mute);font-size:12px;margin-top:14px;line-height:1.7}
+#toasts{position:fixed;bottom:14px;right:14px;display:flex;flex-direction:column-reverse;gap:8px;z-index:50;width:min(360px,calc(100vw - 32px));pointer-events:none}
+.toast{background:rgba(13,20,34,.97);border:1px solid var(--line);border-left:4px solid var(--hold);border-radius:10px;padding:10px 14px;box-shadow:0 10px 34px rgba(0,0,0,.55);animation:tin .4s cubic-bezier(.2,.9,.3,1.3),tout .5s ease-in 6s forwards;font-size:13.5px}
+.toast b{font-size:15px}
+.toast.BUY{border-left-color:var(--buy);box-shadow:0 0 26px rgba(47,209,138,.35)}
+.toast.SELL{border-left-color:var(--sell);box-shadow:0 0 26px rgba(255,93,108,.35)}
+.toast.reward{border-left-color:var(--buy)}.toast.aversive{border-left-color:var(--sell)}.toast.veto{border-left-color:var(--amber)}
+@keyframes tin{from{transform:translateX(40px) scale(.95);opacity:0}}
+@keyframes tout{to{transform:translateX(40px);opacity:0}}
+@media (max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+/* 16:9 stage: fixed 1920x1080 composition, scaled to fit by JS (body.staged). */
+.stage-fit{position:relative;width:100%}
+body.staged{padding:0}
+body.staged .wrap{max-width:none}
+body.staged .stage-fit{overflow:hidden}
+body.staged .stage{position:absolute;top:0;left:0;width:1920px;height:1080px;box-sizing:border-box;padding:18px 22px;transform-origin:0 0;display:flex;flex-direction:column;gap:10px}
+body.staged header{margin:0;flex:none}
+body.staged .flow{margin:0;flex:none;flex-wrap:nowrap}
+body.staged .flow .st{flex:1 1 0;min-width:0}
+body.staged .grid{flex:1 1 auto;min-height:0;grid-template-columns:970px minmax(0,1fr)}
+body.staged .grid > .col:first-child{min-height:0}
+body.staged .grid > .col:first-child > .card{height:100%;box-sizing:border-box;overflow:hidden}
+body.staged .brainbox{width:940px;max-width:none;aspect-ratio:4/3}
+body.staged .grid > .col:last-child{display:grid;min-height:0;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto auto;grid-template-areas:"eye dec" "eye da";gap:14px}
+body.staged #eyeCard{grid-area:eye;display:flex;flex-direction:column}
+body.staged #eyeCard > .tools{margin-top:auto}
+body.staged #daCard{grid-area:da}
+/* Stable decision row (vetoed 270 px, hold 297 px) so the cards below do not jump each step. */
+body.staged #decCard{grid-area:dec;overflow:hidden;min-height:300px}
+body.staged .charts,body.staged .foot{max-width:1440px;margin-left:auto;margin-right:auto;padding:0 16px;box-sizing:border-box}
+body.staged .foot{margin-bottom:16px}
+/* Web Interface Guidelines pass */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+/* Day theme: same variables, light values. Brain/eye canvases stay dark (additive glow needs black). */
+:root[data-theme="light"]{
+  --bg:#eef2f8;--panel:#ffffff;--panel2:#f3f6fb;--line:#d5deeb;--text:#15213a;--mute:#5b6b85;
+  --buy:#0f9f67;--sell:#d93a4c;--hold:#6b7690;--cyan:#0b7fbd;--violet:#6d4fd8;--amber:#b86e00;--pink:#c8407f;--hot:#a86a12;
+  color-scheme:light;
+}
+[data-theme="light"] .pill.run{border-color:#9bd8bd}
+[data-theme="light"] button:hover{background:#e6ecf5;border-color:#b8c6da}
+[data-theme="light"] button:active{background:#dce4ef}
+[data-theme="light"] .bar{background:#e3e9f2}
+[data-theme="light"] .bar>div{box-shadow:none}
+[data-theme="light"] .toast{background:rgba(255,255,255,.97);box-shadow:0 10px 30px rgba(21,33,58,.18)}
+[data-theme="light"] .card{box-shadow:0 1px 2px rgba(21,33,58,.06)}
+.themebtn{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;font-size:12.5px}
+/* Neuron tooltip uses dark styling in both themes. */
+#tip{color:#dde6f6}
+</style>
+</head>
+<body>
+<div id="toasts" aria-live="polite"></div>
+<div class="wrap">
+<div class="stage-fit" id="stageFit"><div class="stage" id="stage">
+<header>
+  <div class="identity"><strong>AI CRYPTO TRADING AGENT</strong><span>Autonomous Crypto Trading System</span></div>
+  <span class="pill" title="This page only reads trading records. It cannot place orders or change any state."><span aria-hidden="true">🔒</span> Read-only</span>
+  <span class="stat">Tick <strong id="tick">–</strong></span>
+  <span class="stat">Paper equity <strong id="equity">–</strong> USDC</span>
+  <span class="stat"><span class="coin" translate="no">–</span> <strong id="price">–</strong></span>
+  <span class="stat">Next step <strong id="next">–</strong></span>
+  <span class="stat">Step compute time <strong id="compute">–</strong></span>
+  <nav class="stat" id="flies"></nav>
+  <button class="themebtn" id="themeToggle" type="button" aria-label="Switch to light mode"><span aria-hidden="true">☀️</span> Light mode</button>
+</header>
+
+<div class="flow" id="flow">
+  <div class="st"><b>① Encode the price chart</b>The last 100&nbsp;minutes of <span class="coin" translate="no">–</span> are rendered as a 320×180 color image</div>
+  <div class="st"><b>② Visual input</b>3,335&nbsp;photoreceptors detect brightness; 811&nbsp;detect blue and green</div>
+  <div class="st"><b>③ Neural propagation · 0.5&nbsp;s</b>166,000&nbsp;neurons and 25.6&nbsp;million real connections, simulated in 0.1&nbsp;ms steps</div>
+  <div class="st"><b>④ Decode the decision</b>Compare firing rates of the left and right <span translate="no">DNp20</span> neurons; <span translate="no">DNpe017</span> acts as a gate</div>
+  <div class="st"><b>⑤ Place an order</b>Buy, sell, or hold; risk controls can veto but cannot change the decision</div>
+  <div class="st fb"><b>↺ Reinforcement learning</b>Profits stimulate <span translate="no">PAM11</span> dopamine; losses stimulate <span translate="no">PPL101</span>, changing mushroom body <span translate="no">KC→MBON</span> synaptic strength</div>
+</div>
+
+<div class="grid">
+  <div class="col">
+    <div class="card">
+      <h2><span aria-hidden="true">🧠</span> Brain and ventral nerve cord: live neural activity</h2>
+      <p class="sub">Each dot marks a neuron's soma at its measured MaleCNS coordinates. When new data arrives, signals propagate from the eyes through layers ordered by real synaptic distance; neurons then flash at their observed firing rates from the previous step (8× slow motion). Drag or use the arrow keys to rotate; Ctrl+scroll or +/− to zoom; hover over a neuron for details.</p>
+      <div class="brainbox" id="brainbox" tabindex="0" role="region" aria-label="Neural activity animation of the fly brain and ventral nerve cord. Use arrow keys to rotate and plus or minus to zoom.">
+        <canvas id="brain"></canvas><canvas id="overlay"></canvas><div id="tip"></div>
+      </div>
+      <div class="tools">
+        <button id="bReplay" class="accent" title="Replay the animation in this browser only; no order will be placed.">▶ Replay animation (no orders)</button>
+        <button id="bAuto" class="on" aria-pressed="true">Auto-rotate</button>
+        <button id="bFront">Front</button>
+        <button id="bSide">Side</button>
+        <button id="bTop">Top</button>
+        <button id="bZoomIn" aria-label="Zoom in on the brain">＋</button>
+        <button id="bZoomOut" aria-label="Zoom out from the brain">－</button>
+        <button id="bMode">Switch to region colors</button>
+        <button id="bKC" aria-pressed="false">Show memory cells (KC)</button>
+        <button id="bEye" aria-pressed="false">Highlight photoreceptors</button>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card" id="eyeCard">
+      <h2><span aria-hidden="true">👁</span> Fly vision</h2>
+      <p class="sub" id="eyeSub"></p>
+      <div class="eyebox"><canvas id="eye" width="640" height="360" role="img" aria-label="Fly vision: price chart and brightness seen by each photoreceptor"></canvas></div>
+      <div class="tools"><button id="bEyeMode">Show fly's view only</button></div>
+    </div>
+
+    <div class="card" id="decCard">
+      <h2><span aria-hidden="true">🎯</span> Current trading decision</h2>
+      <div class="decision"><div class="big" id="side">–</div><div class="exec" id="exec"></div></div>
+      <div class="bars" translate="no">
+        <span>DNp20 left</span><div class="bar"><div id="barL" style="background:var(--sell);color:var(--sell)"></div></div><span class="num" id="numL">–</span>
+        <span>DNp20 right</span><div class="bar"><div id="barR" style="background:var(--buy);color:var(--buy)"></div></div><span class="num" id="numR">–</span>
+        <span>Right − left</span><div class="bar"><div id="barD"></div></div><span class="num" id="numD">–</span>
+        <span>DNpe017 gate</span><div class="bar"><div id="barG" style="background:var(--hot);color:var(--hot)"></div></div><span class="num" id="numG">–</span>
+      </div>
+      <div class="rule">Rule (fixed and manually designed): if the gate fires and right−left &gt; 2&nbsp;Hz → <b style="color:var(--buy)">BUY</b>; if &lt; −2&nbsp;Hz → <b style="color:var(--sell)">SELL</b>; otherwise → HOLD.</div>
+    </div>
+
+    <div class="card" id="daCard">
+      <h2><span aria-hidden="true">💊</span> Reinforcement and memory</h2>
+      <p class="sub" id="reinf">–</p>
+      <div class="bars" translate="no">
+        <span>PAM11 reward</span><div class="bar"><div id="barRw" style="background:var(--buy);color:var(--buy)"></div></div><span class="num" id="numRw">–</span>
+        <span>PPL101 aversive</span><div class="bar"><div id="barAv" style="background:var(--sell);color:var(--sell)"></div></div><span class="num" id="numAv">–</span>
+        <span>KC memory cells</span><div class="bar"><div id="barKC" style="background:var(--violet);color:var(--violet)"></div></div><span class="num" id="numKC">–</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</div></div><!-- /stage -->
+<div class="charts">
+  <div class="card"><h2><span aria-hidden="true">📈</span> <span class="coin" translate="no">–</span> price and paper equity</h2><p class="sub">Blue: <span class="coin" translate="no">–</span> bid; yellow: paper account equity (right axis). ▲ Buy ▼ Sell</p><div id="cPrice"></div></div>
+  <div class="card"><h2><span aria-hidden="true">↔</span> Left–right <span translate="no">DNp20</span> firing difference (Hz)</h2><p class="sub">Dashed lines mark the ±2&nbsp;Hz thresholds; dot color shows the decision (gray means the gate was closed or the difference was too small).</p><div id="cDiff"></div></div>
+  <div class="card"><h2><span aria-hidden="true">💊</span> Dopamine activity</h2><p class="sub">Green: PAM11 reward; red: PPL101 aversive response (increases only after a P&amp;L stimulus).</p><div id="cDA"></div></div>
+  <div class="card"><h2><span aria-hidden="true">🧬</span> Memory synapse changes</h2><p class="sub">Purple: changed KC→MBON synapses (7,835 total); cyan: mean strength (1 = baseline).</p><div id="cMem"></div></div>
+  <div class="card"><h2><span aria-hidden="true">🗺</span> Mean firing rate by region</h2><p class="sub">Mean Hz per neuron over the previous 0.5&nbsp;seconds</p><div class="scbars" id="scbars"></div></div>
+  <div class="card"><h2><span aria-hidden="true">⚖</span> Memory synapse strength distribution</h2><p class="sub">7,835 KC→MBON07/11 synapses; 1.0 = baseline strength, &lt;1 = weakened by dopamine</p><div id="cHist"></div></div>
+</div>
+
+<p class="foot">
+Data source: <span id="runpath"></span> (read-only paper trading). Checked every 4&nbsp;seconds; the animation and dashboard update when a new step appears.<br>
+Animation: the program records only each neuron's spike count per 0.5-second step, not the timing of individual spikes. The propagation order is illustrative, based on synaptic distance from the eyes; flash rates reflect the previous step's observed activity (at 8× slow motion).<br>
+Important: “buy/sell neurons” and “profit/loss dopamine” are human-defined interfaces. The connections come from a real fly connectome, but the neural dynamics and learning rules have not been biologically validated and are not proven profitable.
+</p>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const now = () => performance.now() / 1000;
+const N_MS = 0.5, SLOW = 8, HOP_S = 0.9;
+let META, POS, SC, TYPE, HOP, COUNTS = null, STATE = null, lastKey = null, FAM, SKEW = 0;
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+// Current theme colour from a CSS variable (charts are SVG strings, so resolve at draw time).
+const cssv = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
+
+const SUPERCLASS_NAMES = {
+  ENS:'Enteric neurons', ascending_neuron:'Ascending neurons (body to brain)', cb_efferent:'Central brain output', cb_endocrine:'Central brain endocrine',
+  cb_intrinsic:'Central brain intrinsic', cb_motor:'Brain motor neurons', cb_sensory:'Brain sensory neurons', descending_neuron:'Descending neurons (brain to body)',
+  efferent_ascending:'Ascending efferents', efferent_descending:'Descending efferents', ol_intrinsic:'Optic lobe intrinsic', ol_sensory:'Photoreceptors',
+  sensory_ascending:'Ascending sensory neurons', sensory_descending:'Descending sensory neurons', visual_centrifugal:'Visual centrifugal neurons', visual_projection:'Visual projection (eye to brain)',
+  vnc_efferent:'Ventral nerve cord output', vnc_endocrine:'Ventral nerve cord endocrine', vnc_intrinsic:'Ventral nerve cord intrinsic', vnc_motor:'Ventral nerve cord motor',
+  vnc_sensory:'Ventral nerve cord sensory', vnc_tbc:'Ventral nerve cord (unconfirmed)', unassigned:'Unassigned'
+};
+const displaySuperclass = s => SUPERCLASS_NAMES[s] || (s.endsWith('_tbc') ? (SUPERCLASS_NAMES[s.slice(0,-4)] || s.slice(0,-4)) + ' (unconfirmed)' : s);
+const FAMS = [
+  {name:'Visual system', color:[60,200,255]},
+  {name:'Central brain', color:[169,139,255]},
+  {name:'Ventral nerve cord (body)', color:[255,179,71]},
+  {name:'Ascending / descending', color:[255,122,184]},
+];
+function famOf(s){
+  if (s.startsWith('ol_') || s.startsWith('visual_')) return 0;
+  if (s.startsWith('vnc_')) return 2;
+  if (s.startsWith('cb_') || s === 'ENS') return 1;
+  return 3;
+}
+const EXEC = {FILLED:'Filled (paper)', VETO:'Vetoed by risk controls', HOLD:'No order placed', REJECTED:'Rejected'};
+const REASON = {
+  'Price moved beyond neural observation tolerance':'Price moved beyond the neural observation tolerance',
+  'Order cooldown':'Order cooldown (at least 60&nbsp;seconds between orders)',
+  'Insufficient funds/position or below exchange minimum':'Insufficient funds or position, or below the exchange minimum',
+  'Daily order limit':'Daily order limit reached', 'Spread limit':'Spread is too wide', 'Loss stop reached':'Loss limit reached'
+};
+const SIDE_LABELS = {BUY:'BUY', SELL:'SELL', HOLD:'HOLD'};
+const SIDE_COL = {BUY:'#2fd18a', SELL:'#ff5d6c', HOLD:'#8f99ad'};
+let FLIES = [];  // filled from /flies.json (STONKFLY_FLIES)
+// Keep ~4 significant digits for sub-cent coins such as PEPE.
+function fmtPrice(v){
+  if (!isFinite(v) || v <= 0) return '–';
+  if (v >= 1) return v.toLocaleString(undefined, {maximumFractionDigits: 2});
+  return v.toFixed(Math.min(12, 3 - Math.floor(Math.log10(v))));
+}
+const fmtQty = v => v >= 1000 ? v.toLocaleString(undefined, {maximumFractionDigits: 0}) : String(+v.toFixed(8));
+const STAGES = ['① Photoreceptors see the price chart', '② First optic lobe layer (lamina)', '③ Deep optic lobe and visual projections', '④ Central brain and memory centers', '⑤ Remote: ventral nerve cord', '⑤ Remote: ventral nerve cord'];
+
+/* ---------------- brain view ---------------- */
+const brain = {theta:-0.9, phi:0.35, zoom:1, auto:true, mode:'activity', kc:false, eye:false};
+let cv, ctx, ov, octx, img, acc, small, sctx, SX, SY, cx, cy, cz, range;
+let glow, rate, fireAt, fired, active = new Int32Array(0);
+const special = new Map();
+const wave = {t0:-1e9, len:0, spikes:0, total:0, done:true, event:null, replay:false};
+const fx = {rings:[], parts:[], stim:null, stimT0:-1e9, lastSpawn:0, lastRing:0, banner:null};
+
+function sizeBrain(){
+  const box = $('#brainbox');
+  const w = Math.min(1000, Math.round(box.clientWidth * DPR)), h = Math.round(w * 3 / 4);
+  for (const c of [cv, ov]) { c.width = w; c.height = h; }
+  small.width = Math.max(1, w >> 2); small.height = Math.max(1, h >> 2);
+  img = ctx.createImageData(w, h); acc = new Float32Array(w * h * 3);
+}
+function prepBrain(){
+  cv = $('#brain'); ctx = cv.getContext('2d'); ov = $('#overlay'); octx = ov.getContext('2d');
+  small = document.createElement('canvas'); sctx = small.getContext('2d');
+  const mn = META.bounds_min, mx = META.bounds_max;
+  cx = (mn[0]+mx[0])/2; cy = (mn[1]+mx[1])/2; cz = (mn[2]+mx[2])/2;
+  range = Math.max(mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]);
+  const n = META.n;
+  SX = new Float32Array(n); SY = new Float32Array(n); FAM = new Uint8Array(n);
+  glow = new Float32Array(n); rate = new Float32Array(n); fireAt = new Float32Array(n); fired = new Uint8Array(n);
+  const famBySc = META.superclasses.map(famOf);
+  for (let i = 0; i < n; i++) FAM[i] = famBySc[SC[i]];
+  const g = META.groups;
+  [['dnp20_L','#ff5d6c'],['dnp20_R','#2fd18a'],['gate','#ffd166'],['reward','#2fd18a'],['aversive','#ff5d6c'],['mbon','#c9b8ff']]
+    .forEach(([k, c]) => g[k].forEach(i => special.set(i, c)));
+  sizeBrain(); new ResizeObserver(sizeBrain).observe($('#brainbox'));
+  $('#legend').innerHTML =
+    FAMS.map(f => `<span><i style="background:rgb(${f.color})"></i>${f.name}</span>`).join('') +
+    `<span><i style="background:#ffe08a;box-shadow:0 0 6px #ffd166"></i>Spiking</span>` +
+    `<span><i style="background:var(--sell)"></i>DNp20 left (sell)</span><span><i style="background:var(--buy)"></i>DNp20 right (buy)</span>` +
+    `<span><i style="background:var(--hot)"></i>DNpe017 gate</span>` +
+    `<span><i style="border:2px solid var(--buy);background:none"></i>PAM11 reward dopamine</span>` +
+    `<span><i style="border:2px solid var(--sell);background:none"></i>PPL101 aversive dopamine</span>`;
+}
+
+/* A new tick: replay propagation from the eyes, then fire the decision. */
+// replay=true only re-runs the animation in this browser; it never talks to the trader.
+function startWave(e, replay = false){
+  if (!COUNTS || !e) return;
+  const list = [];
+  wave.total = 0;
+  let last = 0;
+  glow.fill(0);
+  for (let i = 0; i < META.n; i++) {
+    const c = COUNTS[i];
+    if (!c) continue;
+    list.push(i);
+    rate[i] = c / N_MS;
+    const h = HOP[i];
+    const t = (h === 255 ? 1.5 + Math.random() * 2.5 : h * HOP_S + Math.random() * HOP_S * 0.9);
+    fireAt[i] = t; fired[i] = 0; wave.total += c;
+    if (t > last) last = t;
+  }
+  active = Int32Array.from(list);
+  wave.len = Math.min(last, 5 * HOP_S) + 0.5;
+  wave.t0 = now(); wave.spikes = 0; wave.done = false; wave.event = e; wave.replay = replay;
+  fx.rings = []; fx.parts = []; fx.banner = null;
+  eye.t0 = now();
+  lightFlow(1);
+  if (e.stimulus !== 'none') {
+    fx.stim = e.stimulus; fx.stimT0 = now(); fx.lastSpawn = 0; fx.lastRing = 0;
+    const b = $('#brainbox'); b.classList.remove('fx-reward', 'fx-aversive'); void b.offsetWidth; b.classList.add('fx-' + e.stimulus);
+    const fb = document.querySelector('.flow .fb'); fb.classList.remove('lit-reward', 'lit-aversive'); fb.classList.add('lit-' + e.stimulus);
+    setTimeout(() => fb.classList.remove('lit-' + e.stimulus), 5000);
+    toast(e.stimulus === 'reward'
+      ? `<b>💊 Reward stimulus</b><br>Previous step gained ${e.pnl.toFixed(4)} USDC → stimulated 15 PAM11 dopamine neurons for 200 ms`
+      : `<b>💊 Aversive stimulus</b><br>Previous step lost ${Math.abs(e.pnl).toFixed(4)} USDC → stimulated 2 PPL101 dopamine neurons for 200 ms`, e.stimulus);
+  } else fx.stim = null;
+}
+function lightFlow(k){
+  document.querySelectorAll('.flow .st').forEach((el, i) => el.classList.toggle('lit', i === k));
+}
+function fireDecision(e){
+  lightFlow(e.side === 'HOLD' ? 3 : 4);
+  setTimeout(() => lightFlow(-1), 3500);
+  fx.banner = {t0: now(), text: SIDE_LABELS[e.side], color: SIDE_COL[e.side],
+    sub: (wave.replay ? `⟲ Replay of tick ${e.tick} · historical` : '') + (EXEC[e.execution] || e.execution)};
+  const g = META.groups;
+  const origin = e.side === 'SELL' ? g.dnp20_L : e.side === 'BUY' ? g.dnp20_R : [...g.dnp20_L, ...g.dnp20_R];
+  const count = e.execution === 'FILLED' ? 90 : 36;
+  for (let k = 0; k < count; k++) {
+    const a = Math.random() * 7, v = (60 + Math.random() * (e.execution === 'FILLED' ? 260 : 140)) * DPR;
+    fx.parts.push({kind:'burst', i: origin[k % origin.length], vx: Math.cos(a) * v, vy: Math.sin(a) * v, t0: now(), life: 1.4 + Math.random(),
+      color: e.execution === 'FILLED' ? (k % 3 ? '#ffd166' : SIDE_COL[e.side]) : SIDE_COL[e.side]});
+  }
+  const side = $('#side'); side.classList.remove('pop'); void side.offsetWidth; side.classList.add('pop');
+  const card = $('#decCard'); card.classList.remove('glow-BUY', 'glow-SELL', 'glow-HOLD'); void card.offsetWidth; card.classList.add('glow-' + e.side);
+  const why = e.reason ? `<br>${REASON[e.reason] || e.reason}` : '';
+  if (e.execution === 'FILLED') toast(`<b>${e.side === 'BUY' ? '🟢 Buy filled' : '🔴 Sell filled'}</b> (paper)<br>${e.product.split('-')[0]} @ ${fmtPrice(+e.bid)} · Right − left ${e.diff_hz >= 0 ? '+' : ''}${e.diff_hz.toFixed(0)} Hz`, e.side);
+  else if (e.execution === 'VETO') toast(`<b>🛡 Neural proposal to ${e.side === 'BUY' ? 'buy' : 'sell'} vetoed by risk controls</b>${why}`, 'veto');
+  else toast(`<b>⏸ Hold</b><br>Right − left ${e.diff_hz >= 0 ? '+' : ''}${e.diff_hz.toFixed(1)} Hz; gate ${e.gate}${e.gate ? '' : ' (gate closed)'}`, 'HOLD');
+}
+function spark(i){
+  const c = special.get(i);
+  if (c !== undefined && fx.rings.length < 240) fx.rings.push({i, t0: now(), life: .75, color: c, r: 24});
+}
+function groupCenter(ids){
+  let x = 0, y = 0, m = 0;
+  for (const i of ids) if (SX[i] > -1e8) { x += SX[i]; y += SY[i]; m++; }
+  return m ? [x / m, y / m] : null;
+}
+function update(dt){
+  const t = now(), el = t - wave.t0, decay = Math.exp(-dt / 0.2);
+  for (let k = 0; k < active.length; k++) {
+    const i = active[k];
+    let g = glow[i] * decay;
+    if (!fired[i]) {
+      if (el >= fireAt[i]) { fired[i] = 1; g += 1.8; wave.spikes += COUNTS[i]; spark(i); }
+    } else if (Math.random() < rate[i] * dt / SLOW) { g += 1; spark(i); }
+    glow[i] = g;
+  }
+  if (!wave.done && el >= wave.len) { wave.done = true; fireDecision(wave.event); }
+  if (!wave.done && el >= 0) lightFlow(el < HOP_S ? 1 : 2);
+  if (fx.stim && t - fx.stimT0 < 7) {
+    const g = META.groups, src = fx.stim === 'reward' ? 'reward' : 'aversive', col = fx.stim === 'reward' ? '#2fd18a' : '#ff5d6c';
+    if (t - fx.lastSpawn > 0.05) {
+      fx.lastSpawn = t;
+      const pool = Math.random() < .55 ? g.mbon : g.kc;
+      fx.parts.push({kind:'da', src, to: pool[(Math.random() * pool.length) | 0], t0: t, life: 1 + Math.random() * .6, color: col});
+    }
+    if (t - fx.lastRing > 0.7) { fx.lastRing = t; fx.rings.push({group: src, t0: t, life: 1.6, color: col, r: 110}); }
+  }
+  const alive = p => t - p.t0 < p.life;
+  fx.rings = fx.rings.filter(alive); fx.parts = fx.parts.filter(alive);
+}
+const LOG256 = Math.log(256);
+function renderBrain(){
+  const W = cv.width, H = cv.height, n = META.n;
+  acc.fill(0);
+  const ct = Math.cos(brain.theta), st = Math.sin(brain.theta), cp = Math.cos(brain.phi), sp = Math.sin(brain.phi);
+  const s = brain.zoom * Math.min(W, H) / range * 1.25;
+  const act = brain.mode === 'activity', base = act ? .045 : .16;
+  const fc = FAMS.map(f => f.color.map(v => v / 255));
+  const W3 = W * 3;
+  for (let i = 0; i < n; i++) {
+    const x = POS[3*i] - cx;
+    if (x !== x) { SX[i] = -1e9; continue; }
+    const y = POS[3*i+1] - cy, z = POS[3*i+2] - cz;
+    const X = x*ct - z*st, Zr = x*st + z*ct, Y = y*cp + Zr*sp;
+    const px = (W/2 + X*s) | 0, py = (H/2 + Y*s) | 0;
+    SX[i] = px; SY[i] = py;
+    if (px < 1 || py < 1 || px >= W-1 || py >= H-1) continue;
+    const k = (py*W + px) * 3, f = fc[FAM[i]];
+    acc[k] += f[0]*base; acc[k+1] += f[1]*base; acc[k+2] += f[2]*base;
+    const c = COUNTS ? COUNTS[i] : 0;
+    if (!c) continue;
+    const t = Math.log1p(c) / LOG256, g = glow[i];
+    const a = (fired[i] ? 0.04 + 0.16*t : 0) + g * (0.3 + 0.7*t);
+    if (a < 0.01) continue;
+    const hot = Math.min(1, g * .5);
+    const r = a, gg = a * (0.5 + 0.45*hot), b = a * (0.12 + 0.55*hot*t);
+    acc[k] += r; acc[k+1] += gg; acc[k+2] += b;
+    if (g > 0.35) {
+      const h = .45;
+      acc[k+3] += r*h; acc[k+4] += gg*h; acc[k+5] += b*h;
+      acc[k-3] += r*h; acc[k-2] += gg*h; acc[k-1] += b*h;
+      acc[k+W3] += r*h; acc[k+W3+1] += gg*h; acc[k+W3+2] += b*h;
+      acc[k-W3] += r*h; acc[k-W3+1] += gg*h; acc[k-W3+2] += b*h;
+    }
+  }
+  const d = img.data;
+  for (let p = 0, q = 0; p < acc.length; p += 3, q += 4) {
+    const r = acc[p], g = acc[p+1], b = acc[p+2];
+    d[q]   = 4  + 251 * r / (r + 0.7);
+    d[q+1] = 7  + 248 * g / (g + 0.7);
+    d[q+2] = 14 + 241 * b / (b + 0.7);
+    d[q+3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  // Cheap bloom: downscale, blur, add back.
+  sctx.globalCompositeOperation = 'copy'; sctx.filter = 'blur(2px)';
+  sctx.drawImage(cv, 0, 0, small.width, small.height);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = .6; ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(small, 0, 0, W, H); ctx.restore();
+  drawOverlay();
+}
+function drawOverlay(){
+  const W = ov.width, H = ov.height, g = META.groups, t = now();
+  octx.clearRect(0, 0, W, H);
+  const P = DPR;
+  // expanding rings (spikes of identified cells, dopamine shockwaves)
+  for (const r of fx.rings) {
+    const c = r.group ? groupCenter(g[r.group]) : (SX[r.i] > -1e8 ? [SX[r.i], SY[r.i]] : null);
+    if (!c) continue;
+    const p = (t - r.t0) / r.life;
+    octx.beginPath(); octx.arc(c[0], c[1], (4 + r.r * p) * P, 0, 7);
+    octx.strokeStyle = r.color; octx.globalAlpha = (1 - p) * .9; octx.lineWidth = (r.group ? 3 : 2) * P * (1 - p) + .5; octx.stroke();
+  }
+  octx.globalAlpha = 1;
+  // particles
+  octx.globalCompositeOperation = 'lighter';
+  for (const q of fx.parts) {
+    const p = (t - q.t0) / q.life;
+    let x, y;
+    if (q.kind === 'da') {
+      const c = groupCenter(g[q.src]); if (!c || SX[q.to] < -1e8) continue;
+      const e = p < .5 ? 2*p*p : 1 - (-2*p + 2) ** 2 / 2;
+      const mx = (c[0] + SX[q.to]) / 2, my = (c[1] + SY[q.to]) / 2 - 30 * P;
+      x = (1-e)*(1-e)*c[0] + 2*(1-e)*e*mx + e*e*SX[q.to];
+      y = (1-e)*(1-e)*c[1] + 2*(1-e)*e*my + e*e*SY[q.to];
+    } else {
+      if (SX[q.i] < -1e8) continue;
+      const age = t - q.t0, damp = (1 - Math.exp(-age * 2.2)) / 2.2;
+      x = SX[q.i] + q.vx * damp; y = SY[q.i] + q.vy * damp + 40 * P * age * age;
+    }
+    const a = Math.max(0, 1 - p);
+    const grd = octx.createRadialGradient(x, y, 0, x, y, 7 * P);
+    grd.addColorStop(0, q.color); grd.addColorStop(1, 'rgba(0,0,0,0)');
+    octx.globalAlpha = a; octx.fillStyle = grd; octx.fillRect(x - 7*P, y - 7*P, 14*P, 14*P);
+  }
+  octx.globalCompositeOperation = 'source-over'; octx.globalAlpha = 1;
+  const dot = (i, r, fill, stroke) => {
+    if (SX[i] < -1e8) return;
+    octx.beginPath(); octx.arc(SX[i], SY[i], r*P, 0, 7);
+    if (fill) { octx.fillStyle = fill; octx.fill(); }
+    if (stroke) { octx.strokeStyle = stroke; octx.lineWidth = 1.6*P; octx.stroke(); }
+  };
+  if (brain.eye) {
+    for (const i of g.retina) dot(i, 1, 'rgba(255,255,255,.35)');
+    for (const i of g.r8) dot(i, 1.2, 'rgba(90,160,255,.55)');
+  }
+  if (brain.kc) for (const i of g.kc) dot(i, 1.3, glow[i] > .3 ? 'rgba(255,230,140,.95)' : 'rgba(169,139,255,.45)');
+  const lit = (i, col) => glow[i] > .25 ? col : null;
+  for (const i of g.mbon) dot(i, 3.5 + Math.min(4, glow[i] * 2), lit(i, '#ffe08a'), '#c9b8ff');
+  for (const i of g.reward) dot(i, 3.5 + Math.min(4, glow[i] * 2), lit(i, 'rgba(47,209,138,.95)'), '#2fd18a');
+  for (const i of g.aversive) dot(i, 4.5 + Math.min(4, glow[i] * 2), lit(i, 'rgba(255,93,108,.95)'), '#ff5d6c');
+  const lab = [];
+  const big = (ids, col, text) => {
+    for (const i of ids) {
+      if (SX[i] < -1e8) continue;
+      const gl = Math.min(2.5, glow[i]);
+      octx.save(); octx.shadowColor = col; octx.shadowBlur = (6 + gl * 14) * P;
+      octx.beginPath(); octx.arc(SX[i], SY[i], (6 + gl * 3) * P, 0, 7);
+      octx.fillStyle = gl > .2 ? col : 'rgba(0,0,0,.55)'; octx.fill();
+      octx.strokeStyle = col; octx.lineWidth = 2*P; octx.stroke(); octx.restore();
+      lab.push([SX[i], SY[i], `${text} ${COUNTS ? COUNTS[i] : 0} spikes`, col]);
+    }
+  };
+  big(g.dnp20_L, '#ff5d6c', 'DNp20 left'); big(g.dnp20_R, '#2fd18a', 'DNp20 right'); big(g.gate, '#ffd166', 'Gate');
+  const pr = groupCenter(g.reward), pa = groupCenter(g.aversive), pm = groupCenter(g.mbon);
+  if (pr) lab.push([pr[0], pr[1] - 14*P, 'PAM11 reward', '#2fd18a']);
+  if (pa) lab.push([pa[0], pa[1] + 18*P, 'PPL101 aversive', '#ff5d6c']);
+  if (pm) lab.push([pm[0], pm[1] - 26*P, 'MBON memory output', '#c9b8ff']);
+  // Place labels greedily so they never overlap each other or the stage HUD.
+  octx.font = `${11*P}px system-ui, sans-serif`; octx.textBaseline = 'middle';
+  const placed = [[0, 0, 330*P, 66*P]];
+  const hit = (x0, y0, x1, y1) => placed.some(r => x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]);
+  for (const [x, y, s, c] of lab) {
+    const w = octx.measureText(s).width + 8*P, x0 = x + 10*P;
+    let ly = y;
+    for (let k = 1; k < 14 && hit(x0, ly - 8*P, x0 + w, ly + 8*P); k++) ly = y + 18*P * (k % 2 ? (k + 1) / 2 : -k / 2);
+    placed.push([x0, ly - 8*P, x0 + w, ly + 8*P]);
+    if (ly !== y) {
+      octx.strokeStyle = c; octx.globalAlpha = .6; octx.lineWidth = P;
+      octx.beginPath(); octx.moveTo(x, y); octx.lineTo(x0, ly); octx.stroke(); octx.globalAlpha = 1;
+    }
+    octx.fillStyle = 'rgba(4,7,14,.82)'; octx.fillRect(x0, ly - 8*P, w, 16*P);
+    octx.fillStyle = c; octx.fillText(s, x0 + 4*P, ly);
+  }
+  drawHud(W, H, t);
+}
+function drawHud(W, H, t){
+  const P = DPR, el = t - wave.t0;
+  let stage, prog;
+  if (!wave.done) {
+    stage = STAGES[Math.min(STAGES.length - 1, Math.max(0, Math.floor(el / HOP_S)))]; prog = Math.min(1, el / wave.len);
+  } else if (el < wave.len + 4 && wave.event) {
+    stage = '⑥ 0.5 seconds complete → decision: ' + SIDE_LABELS[wave.event.side]; prog = 1;
+    } else { stage = 'Waiting for the next step… neurons continue firing at the previous step’s rates'; prog = null; }
+  octx.font = `600 ${13*P}px system-ui, sans-serif`; octx.textBaseline = 'top';
+  const w = Math.max(octx.measureText(stage).width, 160 * P) + 20*P;
+  octx.fillStyle = 'rgba(4,7,14,.8)'; octx.fillRect(10*P, 10*P, w, prog === null ? 30*P : 52*P);
+  octx.fillStyle = '#dde6f6'; octx.fillText(stage, 20*P, 18*P);
+  if (prog !== null) {
+    octx.fillStyle = '#1c2840'; octx.fillRect(20*P, 40*P, w - 20*P, 4*P);
+    octx.fillStyle = '#3cc8ff'; octx.fillRect(20*P, 40*P, (w - 20*P) * prog, 4*P);
+    octx.font = `${11*P}px system-ui, sans-serif`; octx.fillStyle = '#7c89a3';
+    octx.fillText(`Spikes ${wave.spikes.toLocaleString()} / ${wave.total.toLocaleString()}`, 20*P, 47*P);
+  }
+  octx.font = `${11*P}px system-ui, sans-serif`; octx.textBaseline = 'bottom'; octx.textAlign = 'right';
+  octx.fillStyle = 'rgba(124,137,163,.9)'; octx.fillText('8× slow motion · propagation order by synaptic distance (illustrative)', W - 10*P, H - 8*P);
+  if (wave.replay && el < wave.len + 4) {
+    octx.textBaseline = 'top'; octx.font = `700 ${13*P}px system-ui, sans-serif`;
+    const s = `⟲ Replay tick ${wave.event.tick} · animation only, no orders`, w = octx.measureText(s).width + 16*P;
+    octx.fillStyle = 'rgba(40,28,6,.88)'; octx.fillRect(W - w - 10*P, 10*P, w, 24*P);
+    octx.fillStyle = '#ffb347'; octx.fillText(s, W - w - 2*P, 15*P);
+  }
+  octx.textAlign = 'left';
+  if (fx.stim && t - fx.stimT0 < 6) {
+    const a = Math.max(0, 1 - (t - fx.stimT0) / 6), col = fx.stim === 'reward' ? '47,209,138' : '255,93,108';
+    octx.font = `700 ${15*P}px system-ui, sans-serif`; octx.textBaseline = 'bottom';
+    octx.fillStyle = `rgba(${col},${a})`;
+    octx.fillText(fx.stim === 'reward' ? '💊 Reward dopamine stimulus' : '💊 Aversive dopamine stimulus', 14*P, H - 10*P);
+  }
+  if (fx.banner) {
+    const p = (t - fx.banner.t0) / 2.6;
+    if (p >= 1) fx.banner = null;
+    else {
+      const sc = p < .15 ? .6 + p / .15 * .5 : 1.1 - Math.min(.1, (p - .15));
+      const a = p < .7 ? 1 : 1 - (p - .7) / .3;
+      octx.save(); octx.translate(W / 2, H / 2); octx.scale(sc, sc); octx.globalAlpha = a;
+      octx.textAlign = 'center'; octx.textBaseline = 'middle';
+      octx.shadowColor = fx.banner.color; octx.shadowBlur = 30 * P;
+      octx.font = `900 ${54*P}px system-ui, sans-serif`; octx.fillStyle = fx.banner.color;
+      octx.fillText(fx.banner.text, 0, 0);
+      octx.shadowBlur = 0; octx.font = `600 ${15*P}px system-ui, sans-serif`; octx.fillStyle = '#dde6f6';
+      octx.fillText(fx.banner.sub, 0, 44 * P);
+      octx.restore();
+    }
+  }
+}
+function hover(e){
+  const r = ov.getBoundingClientRect(), mx = (e.clientX - r.left) * ov.width / r.width, my = (e.clientY - r.top) * ov.height / r.height;
+  let best = -1, bd = (7*DPR) ** 2;
+  for (let i = 0; i < META.n; i++) { const dx = SX[i] - mx, dy = SY[i] - my, dd = dx*dx + dy*dy; if (dd < bd) { bd = dd; best = i; } }
+  const tip = $('#tip');
+  if (best < 0) { tip.style.display = 'none'; return; }
+  const c = COUNTS ? COUNTS[best] : 0, ty = META.type_names[TYPE[best]] || 'Unnamed type', h = HOP[best];
+  tip.innerHTML = `<b>${ty}</b> · ${displaySuperclass(META.superclasses[SC[best]])}<br>Previous step: <b>${c}</b> spikes (${(c / N_MS).toFixed(0)} Hz)` +
+    `<br>Synapses from the eyes: ${h === 255 ? 'no path' : h}`;
+  tip.style.display = 'block';
+  // r is on-screen (after the 16:9 stage scale); the tooltip is positioned in layout px.
+  const k = r.width / ov.offsetWidth || 1, bx = (e.clientX - r.left) / k, by = (e.clientY - r.top) / k;
+  tip.style.left = Math.max(4, Math.min(bx + 14, ov.offsetWidth - tip.offsetWidth - 4)) + 'px';
+  tip.style.top = Math.max(4, by - 58) + 'px';
+}
+// Hit-testing walks all 166k projected neurons; do it at most once per frame.
+let hoverEvt = null;
+function queueHover(e){
+  if (!hoverEvt) requestAnimationFrame(() => { const ev = hoverEvt; hoverEvt = null; if (ev) hover(ev); });
+  hoverEvt = e;
+}
+function bindBrain(){
+  const box = $('#brainbox'); let drag = null;
+  box.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; box.setPointerCapture(e.pointerId); box.style.cursor = 'grabbing'; });
+  box.addEventListener('pointerup', () => { drag = null; box.style.cursor = 'grab'; });
+  box.addEventListener('pointermove', e => {
+    if (drag) {
+      brain.theta += (e.clientX - drag[0]) * 0.008;
+      brain.phi = Math.max(-1.5, Math.min(1.5, brain.phi + (e.clientY - drag[1]) * 0.008));
+      drag = [e.clientX, e.clientY]; setAuto(false);
+    } else queueHover(e);
+  });
+  box.addEventListener('pointerleave', () => { hoverEvt = null; $('#tip').style.display = 'none'; });
+  // Plain wheel scrolls the page (the brain fills half the 16:9 stage); Ctrl/Cmd+wheel zooms.
+  const zoomBy = f => { brain.zoom = Math.max(.5, Math.min(6, brain.zoom * f)); };
+  box.addEventListener('wheel', e => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.12 : 1/1.12); }, {passive:false});
+  box.addEventListener('keydown', e => {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'ArrowRight') { brain.theta += (k === 'ArrowLeft' ? -1 : 1) * 0.15; setAuto(false); }
+    else if (k === 'ArrowUp' || k === 'ArrowDown') { brain.phi = Math.max(-1.5, Math.min(1.5, brain.phi + (k === 'ArrowUp' ? -1 : 1) * 0.15)); setAuto(false); }
+    else if (k === '+' || k === '=') zoomBy(1.12);
+    else if (k === '-' || k === '_') zoomBy(1/1.12);
+    else return;
+    e.preventDefault();
+  });
+  $('#bZoomIn').onclick = () => zoomBy(1.25);
+  $('#bZoomOut').onclick = () => zoomBy(1/1.25);
+  const view = (t, p) => () => { brain.theta = t; brain.phi = p; setAuto(false); };
+  $('#bFront').onclick = view(0, 0);
+  $('#bSide').onclick = view(Math.PI/2, 0);
+  $('#bTop').onclick = view(0, -Math.PI/2 + 0.01);
+  $('#bAuto').onclick = () => setAuto(!brain.auto);
+  $('#bReplay').onclick = () => startWave(STATE && STATE.events[STATE.events.length - 1], true);
+  $('#bMode').onclick = () => { brain.mode = brain.mode === 'activity' ? 'region' : 'activity';
+    $('#bMode').textContent = brain.mode === 'activity' ? 'Switch to region colors' : 'Switch to firing activity'; };
+  $('#bKC').onclick = () => { brain.kc = !brain.kc; $('#bKC').classList.toggle('on', brain.kc); $('#bKC').setAttribute('aria-pressed', brain.kc); };
+  $('#bEye').onclick = () => { brain.eye = !brain.eye; $('#bEye').classList.toggle('on', brain.eye); $('#bEye').setAttribute('aria-pressed', brain.eye); };
+}
+function setAuto(v){ brain.auto = v; $('#bAuto').classList.toggle('on', v); $('#bAuto').setAttribute('aria-pressed', v); }
+let lastRender = 0;
+function loop(ts){
+  const t = ts / 1000;
+  if (t - lastRender >= 1/30 - 0.002) {
+    const dt = Math.min(0.1, lastRender ? t - lastRender : 1/30);
+    lastRender = t;
+    if (brain.auto) brain.theta += 0.12 * dt;
+    update(dt); renderBrain();
+    if (t - eye.t0 < eye.dur + .1) drawEye(Math.min(1, (t - eye.t0) / eye.dur));
+    else if (!eye.final) drawEye(1);
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ---------------- eye ---------------- */
+const eyeImg = new Image(), eye = {t0: -1e9, dur: 1.6, only: false, final: false};
+eyeImg.onload = () => { eye.final = false; };
+function drawEye(p){
+  eye.final = p >= 1;
+  const c = $('#eye'), x = c.getContext('2d'), W = c.width, H = c.height;
+  x.fillStyle = '#000'; x.fillRect(0, 0, W, H);
+  if (!eye.only && eyeImg.complete && eyeImg.naturalWidth) { x.globalAlpha = .5; x.drawImage(eyeImg, 0, 0, W, H); x.globalAlpha = 1; }
+  const cp = STATE && STATE.checkpoint; if (!cp) return;
+  const lum = cp.luminance, r8 = cp.r8_light, front = .07;
+  META.retina_uv.forEach(([u, v], i) => {
+    if (u > p) return;
+    const L = lum[i] ?? 0, gv = Math.round(255 * Math.pow(L, 1/2.2)), near = p < 1 && p - u < front;
+    x.fillStyle = near ? `rgb(${Math.min(255, gv + 90)},${Math.min(255, gv + 160)},255)` : `rgb(${gv},${gv},${gv})`;
+    const s = near ? 5 : 3;
+    x.fillRect(u*(W-1) - s/2, v*(H-1) - s/2, s, s);
+  });
+  x.globalCompositeOperation = 'lighter';
+  META.r8_uv.forEach(([u, v], i) => {
+    if (u > p) return;
+    const L = Math.pow(r8[i] ?? 0, 1/2.2), blue = META.r8_channel[i] === 2;
+    x.fillStyle = blue ? `rgba(80,150,255,${L})` : `rgba(80,255,150,${L})`;
+    x.beginPath(); x.arc(u*(W-1), v*(H-1), p < 1 && p - u < front ? 4 : 2.2, 0, 7); x.fill();
+  });
+  if (p < 1) {
+    const sx = p * W, grd = x.createLinearGradient(sx - 60, 0, sx + 4, 0);
+    grd.addColorStop(0, 'rgba(60,200,255,0)'); grd.addColorStop(1, 'rgba(60,200,255,.55)');
+    x.fillStyle = grd; x.fillRect(sx - 60, 0, 64, H);
+  }
+  x.globalCompositeOperation = 'source-over';
+}
+
+/* ---------------- charts ---------------- */
+function chart(el, opt){
+  const W = 520, H = 170, L = 40, R = opt.right ? 44 : 10, T = 8, B = 20, iw = W - L - R, ih = H - T - B;
+  const n = opt.n; if (!n) { $(el).innerHTML = '<p class="sub">Waiting for data…</p>'; return; }
+  const X = i => L + (n === 1 ? iw/2 : i * iw / (n - 1));
+  let out = `<svg viewBox="0 0 ${W} ${H}">`;
+  const scale = (vals, extra = []) => { let lo = Math.min(...vals, ...extra), hi = Math.max(...vals, ...extra); if (hi - lo < 1e-9) { lo -= 1; hi += 1; } const p = (hi - lo) * .08; return [lo - p, hi + p]; };
+  const yOf = ([lo, hi]) => v => T + ih - (v - lo) / (hi - lo) * ih;
+  const fmt = opt.fmt || (v => v.toFixed(0));
+  (opt.series || []).forEach((s, si) => {
+    const sc = s.range || scale(s.values, s.include || []), Y = yOf(sc);
+    if (si === 0 || s.axis === 'right') {
+      const xL = s.axis === 'right' ? W - R + 4 : 4;
+      out += `<text class="axis" x="${xL}" y="${T + 8}">${(s.fmt || fmt)(sc[1])}</text><text class="axis" x="${xL}" y="${T + ih}">${(s.fmt || fmt)(sc[0])}</text>`;
+    }
+    (s.hlines || []).forEach(h => out += `<line x1="${L}" x2="${W - R}" y1="${Y(h.v)}" y2="${Y(h.v)}" stroke="${h.color}" stroke-dasharray="4 4" stroke-width="1"/>`);
+    if (s.bars) {
+      const bw = Math.max(1.5, iw / n * .35);
+      s.values.forEach((v, i) => out += `<rect x="${X(i) - bw/2 + (s.offset || 0) * bw}" y="${Y(Math.max(v, 0))}" width="${bw}" height="${Math.max(0, Y(0) - Y(Math.max(v, 0)))}" fill="${s.color}" opacity=".85"/>`);
+    } else {
+      out += `<polyline fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" points="${s.values.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ')}"/>`;
+    }
+    (s.marks || []).forEach(m => {
+      const px = X(m.i), py = Y(s.values[m.i]);
+      if (m.shape === 'up') out += `<path d="M${px} ${py - 11}l5 8h-10z" fill="${m.color}"/>`;
+      else if (m.shape === 'down') out += `<path d="M${px} ${py + 11}l5 -8h-10z" fill="${m.color}"/>`;
+      else out += `<circle cx="${px}" cy="${py}" r="3.2" fill="${m.color}"/>`;
+    });
+  });
+  out += `<line x1="${L}" x2="${W - R}" y1="${T + ih}" y2="${T + ih}" stroke="${cssv('--line')}"/>`;
+  if (opt.ticks) out += `<text class="axis" x="${L}" y="${H - 5}">Tick ${opt.ticks[0]}</text><text class="axis" x="${W - R}" y="${H - 5}" text-anchor="end">Tick ${opt.ticks[1]}</text>`;
+  $(el).innerHTML = out + '</svg>';
+}
+function drawCharts(){
+  const ev = STATE.events.slice(-120), n = ev.length, ticks = n ? [ev[0].tick, ev[n - 1].tick] : null;
+  const dotCol = {BUY: cssv('--buy'), SELL: cssv('--sell'), HOLD: cssv('--hold')};
+  const trades = ev.map((e, i) => e.execution === 'FILLED' ? {i, shape: e.side === 'BUY' ? 'up' : 'down', color: dotCol[e.side]} : null).filter(Boolean);
+  chart('#cPrice', {n, ticks, right: true, series: [
+    {values: ev.map(e => +e.bid), color: cssv('--cyan'), marks: trades, fmt: fmtPrice},
+    {values: ev.map(e => e.equity), color: cssv('--hot'), axis: 'right', fmt: v => v.toFixed(2)},
+  ]});
+  chart('#cDiff', {n, ticks, fmt: v => v.toFixed(1), series: [{
+    values: ev.map(e => e.diff_hz), color: cssv('--mute'), include: [-3, 3],
+    hlines: [{v: 2, color: cssv('--buy')}, {v: -2, color: cssv('--sell')}, {v: 0, color: cssv('--line')}],
+    marks: ev.map((e, i) => ({i, color: dotCol[e.side]})),
+  }]});
+  const daMax = Math.max(1, ...ev.map(e => Math.max(e.reward_spikes, e.aversive_spikes)));
+  chart('#cDA', {n, ticks, series: [
+    {values: ev.map(e => e.reward_spikes), color: cssv('--buy'), bars: true, offset: -.5, range: [0, daMax * 1.08]},
+    {values: ev.map(e => e.aversive_spikes), color: cssv('--sell'), bars: true, offset: .5, range: [0, daMax * 1.08]},
+  ]});
+  chart('#cMem', {n, ticks, right: true, series: [
+    {values: ev.map(e => e.changed_edges), color: cssv('--violet'), include: [0]},
+    {values: ev.map(e => e.mean_efficacy), color: cssv('--cyan'), axis: 'right', include: [1], fmt: v => v.toFixed(3)},
+  ]});
+  const cp = STATE.checkpoint;
+  if (cp) {
+    const h = cp.efficacy_hist, ed = cp.efficacy_edges, hm = Math.max(...h, 1), W = 520, H = 170, bw = 480 / h.length;
+    let s = `<svg viewBox="0 0 ${W} ${H}">`;
+    h.forEach((v, i) => {
+      const bh = v ? Math.max(1.5, Math.log1p(v) / Math.log1p(hm) * 130) : 0, mid = (ed[i] + ed[i + 1]) / 2;
+      s += `<rect x="${30 + i * bw}" y="${145 - bh}" width="${bw - 1}" height="${bh}" fill="${mid < .98 ? '#ff8a5c' : mid > 1.02 ? '#2fd18a' : '#a98bff'}"><title>${ed[i]}–${ed[i + 1]}: ${v} edges</title></rect>`;
+    });
+    [0.1, 0.5, 1, 1.5, 2].forEach(v => { const x = 30 + (v - .1) / 1.9 * 480; s += `<text class="axis" x="${x}" y="162" text-anchor="middle">${v}</text>`; });
+    s += `<text class="axis" x="30" y="12">Edge count (log scale)</text>`;
+    $('#cHist').innerHTML = s + '</svg>';
+  }
+}
+function drawSuperclass(){
+  if (!COUNTS) return;
+  const k = META.superclasses.length, sum = new Float64Array(k);
+  for (let i = 0; i < META.n; i++) sum[SC[i]] += COUNTS[i];
+  const rows = META.superclasses.map((s, j) => ({s, hz: sum[j] / META.superclass_sizes[j] / N_MS, size: META.superclass_sizes[j]}))
+    .filter(r => r.size >= 20).sort((a, b) => b.hz - a.hz);
+  const mx = Math.max(...rows.map(r => r.hz), 1e-9);
+  $('#scbars').innerHTML = rows.map(r => `<span title="${r.s}, ${r.size.toLocaleString()} neurons">${displaySuperclass(r.s)}</span><div class="bar"><div style="width:${r.hz / mx * 100}%;background:rgb(${FAMS[famOf(r.s)].color});color:rgb(${FAMS[famOf(r.s)].color})"></div></div><span class="num">${r.hz.toFixed(1)} Hz</span>`).join('');
+}
+
+/* ---------------- panels ---------------- */
+function toast(html, cls){
+  if (wave.replay) html = `<span style="color:var(--amber)">⟲ Replay tick ${wave.event.tick} (animation only, no orders)</span><br>` + html;
+  const box = $('#toasts'), d = document.createElement('div');
+  d.className = 'toast ' + (cls || ''); d.innerHTML = html; box.prepend(d);
+  setTimeout(() => d.remove(), 6600);
+  while (box.children.length > 4) box.lastChild.remove();
+}
+function setBar(id, v, max, color){ const el = $(id); el.style.width = Math.min(100, Math.abs(v) / max * 100) + '%'; if (color) { el.style.background = color; el.style.color = color; } }
+function drawPanels(){
+  const ev = STATE.events, e = ev[ev.length - 1], lg = STATE.ledger || {};
+  $('#runpath').textContent = STATE.run;
+  if (!e) return;
+  $('#tick').textContent = e.tick;
+  $('#equity').textContent = e.equity.toFixed(2);
+  const coin = e.product.split('-')[0];
+  document.querySelectorAll('.coin').forEach(el => el.textContent = coin);
+  $('#price').textContent = fmtPrice(+e.bid);
+  $('#compute').textContent = e.compute.toFixed(1) + ' s';
+  $('#side').textContent = SIDE_LABELS[e.side]; $('#side').className = 'big ' + e.side + (e.execution === 'VETO' ? ' vetoed' : '');
+  $('#exec').innerHTML = `Execution: <strong${e.execution === 'VETO' ? ' class="veto"' : ''}>${EXEC[e.execution] || e.execution}</strong>` + (e.reason ? `<br>${REASON[e.reason] || e.reason}` : '') +
+    `<br>Cash: ${(+lg.cash || 0).toFixed(2)} USDC` + (lg.positions && Object.keys(lg.positions).length ? ` · Holdings: ${Object.entries(lg.positions).map(([k, v]) => `${fmtQty(+v)} ${k.split('-')[0]}`).join(', ')}` : '');
+  const hzMax = Math.max(20, e.left_hz, e.right_hz);
+  setBar('#barL', e.left_hz, hzMax); setBar('#barR', e.right_hz, hzMax);
+  setBar('#barD', e.diff_hz, Math.max(10, Math.abs(e.diff_hz)), e.diff_hz > 2 ? 'var(--buy)' : e.diff_hz < -2 ? 'var(--sell)' : 'var(--hold)');
+  setBar('#barG', e.gate, Math.max(10, e.gate));
+  $('#numL').textContent = e.left_hz.toFixed(0) + ' Hz'; $('#numR').textContent = e.right_hz.toFixed(0) + ' Hz';
+  $('#numD').textContent = (e.diff_hz >= 0 ? '+' : '') + e.diff_hz.toFixed(0) + ' Hz'; $('#numG').textContent = e.gate;
+  const st = {reward:'✅ Previous step profitable → PAM11 reward dopamine stimulated for 200&nbsp;ms', aversive:'⚠️ Previous step at a loss → PPL101 aversive dopamine stimulated for 200&nbsp;ms', none:'P&amp;L within ±0.01&nbsp;USDC → no stimulus'}[e.stimulus];
+  $('#reinf').innerHTML = `${st}<br>Current step P&amp;L: ${e.pnl >= 0 ? '+' : ''}${e.pnl.toFixed(4)} USDC (including fees)`;
+  const m = Math.max(10, e.reward_spikes, e.aversive_spikes);
+  setBar('#barRw', e.reward_spikes, m); setBar('#barAv', e.aversive_spikes, m); setBar('#barKC', e.kc_spikes, Math.max(100, e.kc_spikes));
+  $('#numRw').textContent = e.reward_spikes; $('#numAv').textContent = e.aversive_spikes; $('#numKC').textContent = e.kc_spikes.toLocaleString();
+  $('#eyeSub').textContent = eye.only ? 'What the fly actually sees: each dot is a photoreceptor; white dots detect brightness (R1–R6), and blue/green dots detect color (R8).' : 'The input price chart (translucent) is overlaid with each photoreceptor’s view; brightness represents perceived light. The image scans from left to right when a new step arrives.';
+}
+setInterval(() => {
+  const e = STATE && STATE.events[STATE.events.length - 1]; if (!e) return;
+  const left = Math.round(e.time + 60 - Date.now() / 1000 - SKEW);
+  $('#next').textContent = left > 0 ? `in ${left} s` : 'Computing…';
+}, 1000);
+
+// 16:9 stage: scale the fixed 1920x1080 top section to fit the window and centre it.
+(function(){
+  const fit = document.getElementById('stageFit'), stage = document.getElementById('stage');
+  const wide = matchMedia('(min-width: 900px)');
+  function place(){
+    if (!wide.matches) {
+      document.body.classList.remove('staged');
+      stage.style.transform = stage.style.left = fit.style.height = '';
+      return;
+    }
+    document.body.classList.add('staged');
+    const vw = document.documentElement.clientWidth, vh = window.innerHeight;
+    const k = Math.min(vw / 1920, vh / 1080);
+    stage.style.transform = `scale(${k})`;
+    stage.style.left = Math.max(0, Math.round((vw - 1920 * k) / 2)) + 'px';
+    fit.style.height = Math.round(1080 * k) + 'px';
+  }
+  addEventListener('resize', place);
+  wide.addEventListener('change', place);
+  place();
+})();
+
+// Day/night toggle: remembered per browser; charts redraw with the new palette.
+function applyTheme(theme, remember = true){
+  const light = theme === 'light', root = document.documentElement;
+  if (light) root.dataset.theme = 'light'; else delete root.dataset.theme;
+  document.querySelector('meta[name="theme-color"]').content = light ? '#eef2f8' : '#060a13';
+  const b = $('#themeToggle');
+  b.innerHTML = light ? '<span aria-hidden="true">🌙</span> Dark mode' : '<span aria-hidden="true">☀️</span> Light mode';
+  b.setAttribute('aria-label', light ? 'Switch to dark mode' : 'Switch to light mode');
+  if (remember) {
+    try { localStorage.setItem('stonkfly-theme', light ? 'light' : 'dark'); } catch (e) {}
+    const url = new URL(location.href);
+    if (url.searchParams.has('theme')) { url.searchParams.set('theme', light ? 'light' : 'dark'); history.replaceState(null, '', url); }
+  }
+  if (STATE && STATE.events) drawCharts();
+}
+$('#themeToggle').onclick = () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+applyTheme(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark', false);
+
+/* ---------------- polling ---------------- */
+async function poll(){
+  try {
+    STATE = await fetch('state.json').then(r => r.json());
+    SKEW = STATE.now ? STATE.now - Date.now() / 1000 : 0;  // viewer clock may be off
+    const e = STATE.events[STATE.events.length - 1], key = (e ? e.tick : 0) + ':' + (STATE.checkpoint ? STATE.checkpoint.mtime : 0);
+    if (key !== lastKey) {
+      lastKey = key;
+      COUNTS = new Uint8Array(await fetch('counts.bin').then(r => r.arrayBuffer()));
+      if (COUNTS.length !== META.n) COUNTS = null;
+      eyeImg.src = 'input.png?t=' + Date.now();
+      drawPanels(); drawCharts(); drawSuperclass();
+      startWave(e);
+    } else drawPanels();
+  } catch (err) { console.error('Dashboard update failed; will retry in 4 seconds.', err); }
+}
+async function init(){
+  const [meta, pos, sc, ty, hop] = await Promise.all([
+    fetch('meta.json').then(r => r.json()), fetch('pos.bin').then(r => r.arrayBuffer()),
+    fetch('sc.bin').then(r => r.arrayBuffer()), fetch('type.bin').then(r => r.arrayBuffer()), fetch('hop.bin').then(r => r.arrayBuffer())]);
+  META = meta; POS = new Float32Array(pos); SC = new Uint8Array(sc); TYPE = new Uint16Array(ty); HOP = new Uint8Array(hop);
+  FLIES = await fetch('flies.json').then(r => r.json()).catch(() => []);
+  $('#flies').innerHTML = FLIES.map(f => location.port === String(f.port)
+    ? `<strong style="color:var(--hot)">● ${f.name}</strong>`
+    : `<a style="color:var(--cyan)" href="${location.protocol}//${location.hostname}:${f.port}/">${f.name} →</a>`).join('　');
+  prepBrain(); bindBrain();
+  if (REDUCED.matches) setAuto(false);
+  $('#bEyeMode').onclick = () => { eye.only = !eye.only; $('#bEyeMode').textContent = eye.only ? 'Overlay on the original image' : 'Show fly’s view only'; drawPanels(); eye.final = false; };
+  await poll(); setInterval(poll, 4000); requestAnimationFrame(loop);
+}
+init();
+</script>
+</body>
+</html>

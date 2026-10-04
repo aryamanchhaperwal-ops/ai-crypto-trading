@@ -46,8 +46,9 @@ def build():
             return record
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     temp = LIBRARY.with_suffix(LIBRARY.suffix + ".partial")
+    cxx_cmd = ["C:\\zig\\zig-windows-x86_64-0.13.0\\zig.exe", "c++"] if sys.platform == "win32" else ["c++"]
     subprocess.run(
-        ["c++", "-O3", "-std=c++17", "-shared", "-fPIC", str(SOURCE), "-o", str(temp)],
+        cxx_cmd + ["-O3", "-std=c++17", "-shared", "-fPIC", str(SOURCE), "-o", str(temp)],
         check=True,
     )
     temp.replace(LIBRARY)

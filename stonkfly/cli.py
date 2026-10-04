@@ -1,8 +1,13 @@
+
+
 """Single-worker run loop. Default execution is paper; live must be explicit."""
 
 import argparse
 import dataclasses
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import hashlib
 import json
 import os
@@ -108,8 +113,12 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     lock = (out / "worker.lock").open("a")
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        if 'fcntl' in sys.modules and getattr(sys.modules['fcntl'], 'flock', None):
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+    except (BlockingIOError, OSError):
         raise SystemExit("A worker already owns this run directory")
     from .broker import CoinbaseBroker, PaperBroker
     from .ledger import Ledger

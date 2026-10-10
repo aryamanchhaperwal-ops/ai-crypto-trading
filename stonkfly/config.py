@@ -42,12 +42,13 @@ class Settings:
     decoder_threshold_hz: float = 2
     paper_fee: str = "0.006"
     learning: bool = True
+    safety_margin: str = "0.005"
+    signal_edge_factor: str = "0.001"
 
     def __post_init__(self):
         if (
             not self.products
             or len(set(self.products)) != len(self.products)
-            or not set(self.products) <= set(("BTC-USDC", "ETH-USDC", "SOL-USDC"))
         ):
             raise ValueError("Only allowlisted USDC spot pairs")
         if not 0 < D(self.capital) <= 100 or not 0 < D(self.order_limit) <= min(

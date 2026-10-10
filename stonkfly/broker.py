@@ -23,6 +23,8 @@ class PaperBroker:
     mode = "paper"
 
     def __init__(self, settings, ledger):
+        if ledger.get("mode") != self.mode:
+            raise RuntimeError("Paper broker requires an isolated paper ledger")
         self.s = settings
         self.l = ledger
 
@@ -33,12 +35,17 @@ class PaperBroker:
         pass
 
     def reconcile(self):
-        # Paper requests never leave the process; the immutable plan contains
-        # the execution quote, so an interrupted fill can settle exactly once.
+        # A PREPARED intent may not have passed the final execution guard. Unlike
+        # an exchange order, it is safe to reject rather than replay it on restart.
         for row in self.l.pending():
-            self._fill(row["plan"])
+            if row["status"] == "PREPARED":
+                self.l.mark(row["id"], "REJECTED")
+            else:
+                raise RuntimeError("Unexpected non-paper order state")
 
     def execute(self, plan, before_submit):
+        if self.l.get("mode") != self.mode:
+            raise RuntimeError("Paper execution is disabled for a non-paper ledger")
         try:
             before_submit(plan)
         except Exception:
@@ -71,6 +78,13 @@ class CoinbaseBroker:
         self.l = ledger
         self.client = client
         self.portfolio = portfolio
+        self.preflight_checks = []
+        self.preflight_values = {}
+
+    def _preflight_check(self, name, status, detail):
+        self.preflight_checks.append(
+            {"name": name, "status": status, "detail": str(detail)}
+        )
 
     @classmethod
     def from_env(cls, settings, ledger):
@@ -119,19 +133,110 @@ class CoinbaseBroker:
         return result
 
     def preflight(self):
-        permissions = unwrap(self.client.get_api_key_permissions())
+        self.preflight_checks = []
+        self.preflight_values = {
+            "portfolio": f"Configured portfolio (ID suffix: {self.portfolio[-4:]})"
+        }
+        try:
+            permissions = unwrap(self.client.get_api_key_permissions())
+        except Exception as exc:
+            self._preflight_check(
+                "Coinbase API connection",
+                "FAIL",
+                f"Permission endpoint request failed ({type(exc).__name__})",
+            )
+            for name in ["API permissions", "Order permissions", "Portfolio scope"]:
+                self._preflight_check(name, "BLOCKED", "Authentication check failed")
+            raise RuntimeError(
+                f"Coinbase API permission request failed ({type(exc).__name__})"
+            ) from None
+        self._preflight_check(
+            "Coinbase API connection", "PASS", "Authenticated permissions endpoint responded"
+        )
         if (
             permissions.get("can_view") is not True
             or permissions.get("can_trade") is not True
             or permissions.get("can_transfer") is not False
         ):
+            self._preflight_check(
+                "API permissions",
+                "FAIL",
+                "Require View + Trade, with Transfer explicitly disabled",
+            )
+            self._preflight_check(
+                "Order permissions",
+                "PASS" if permissions.get("can_trade") is True else "FAIL",
+                "Trade permission is enabled"
+                if permissions.get("can_trade") is True
+                else "Trade permission is not enabled",
+            )
+            self._preflight_check(
+                "Portfolio scope", "BLOCKED", "API permissions did not pass"
+            )
             raise RuntimeError(
                 "Require View + Trade, with Transfer explicitly disabled"
             )
+        self._preflight_check(
+            "API permissions", "PASS", "View and Trade enabled; Transfer disabled"
+        )
+        self._preflight_check(
+            "Order permissions", "PASS", "Trade is enabled; Transfer is disabled"
+        )
         if permissions.get("portfolio_uuid") != self.portfolio:
+            self._preflight_check(
+                "Portfolio scope", "FAIL", "API key is not scoped to configured portfolio"
+            )
             raise RuntimeError("API key is not scoped to the configured portfolio")
-        self.reconcile()
-        balances = self.accounts()
+        self._preflight_check(
+            "Portfolio scope", "PASS", "API key matches the configured portfolio"
+        )
+        try:
+            self.reconcile()
+            balances = self.accounts()
+        except Exception as exc:
+            self._preflight_check(
+                "Portfolio account access",
+                "FAIL",
+                f"Account or order reconciliation failed ({type(exc).__name__})",
+            )
+            raise
+        self._preflight_check(
+            "Portfolio account access", "PASS", "Account balances were read for configured portfolio"
+        )
+        self.preflight_values["available_balances"] = {
+            currency: str(amount) for currency, amount in sorted(balances.items())
+        }
+        self.preflight_values["available_usdc"] = str(balances.get("USDC", D(0)))
+        try:
+            open_orders = unwrap(
+                self.client.list_orders(
+                    order_status=["OPEN"],
+                    retail_portfolio_id=self.portfolio,
+                    limit=1,
+                )
+            ).get("orders", [])
+        except Exception as exc:
+            self._preflight_check(
+                "Open order state",
+                "FAIL",
+                f"Open-order check failed ({type(exc).__name__})",
+            )
+            raise RuntimeError(
+                f"Could not verify open Coinbase orders ({type(exc).__name__})"
+            ) from None
+        if open_orders:
+            self._preflight_check(
+                "Open order state", "FAIL", "Open order exists in configured portfolio"
+            )
+            raise RuntimeError("External/open order in dedicated portfolio")
+        self._preflight_check("Open order state", "PASS", "No open orders found")
+        if any(v for k, v in balances.items() if k != "USDC"):
+            self._preflight_check(
+                "Available trading balance",
+                "FAIL",
+                "Dedicated portfolio must contain only USDC before initialization",
+            )
+            raise RuntimeError("Start with only USDC in a dedicated portfolio")
         if not self.l.get("live_initialized"):
             if (
                 self.l.get("tick")
@@ -142,6 +247,13 @@ class CoinbaseBroker:
                 raise RuntimeError("Start with only USDC in a dedicated portfolio")
             cash = balances.get("USDC", D(0))
             if not 0 < cash <= D(self.s.capital):
+                detail = (
+                    f"Available USDC is {cash}; requires a balance greater than 0 "
+                    f"and no more than {self.s.capital}"
+                )
+                self._preflight_check(
+                    "Available trading balance", "FAIL", detail
+                )
                 raise RuntimeError(
                     "Fund dedicated portfolio with 0 < USDC <= configured $100 cap"
                 )
@@ -149,8 +261,34 @@ class CoinbaseBroker:
                 for k in ["cash", "initial_cash", "anchor"]:
                     self.l.put(k, str(cash))
                 self.l.put("live_initialized", True)
-        self.verify_balances()
-        return {"mode": "live", "portfolio_scoped": True, "withdrawals_disabled": True}
+        self._preflight_check(
+            "Available trading balance",
+            "PASS",
+            f"{balances.get('USDC', D(0))} USDC available",
+        )
+        try:
+            self.verify_balances()
+        except Exception as exc:
+            self._preflight_check(
+                    "Account and open-order reconciliation",
+                    "FAIL",
+                    str(exc)
+                    if isinstance(exc, RuntimeError)
+                    else f"Balance/order verification failed ({type(exc).__name__})",
+            )
+            raise
+        self._preflight_check(
+            "Account and open-order reconciliation",
+            "PASS",
+            "Balances match the local ledger; no open orders",
+        )
+        return {
+            "mode": "live",
+            "portfolio_scoped": True,
+            "withdrawals_disabled": True,
+            "checks": self.preflight_checks,
+            "values": self.preflight_values,
+        }
 
     def verify_balances(self):
         actual = self.accounts()

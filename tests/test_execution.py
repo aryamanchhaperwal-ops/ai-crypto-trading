@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from stonkfly.actions import StonkflyActions
 from stonkfly.broker import CoinbaseBroker, PaperBroker, UnresolvedOrder
 from stonkfly.config import D, Settings
+from stonkfly.cli import build_run_settings, load_model_for_preflight
 from stonkfly.ledger import Ledger
 from stonkfly.market import Quote
 from stonkfly.reinforcement import reinforcement
@@ -61,6 +62,51 @@ def test_configuration_bounds(changes):
         Settings(**changes)
 
 
+def test_paper_starting_balance_is_configurable_without_changing_live_cap(monkeypatch):
+    monkeypatch.setenv("PAPER_STARTING_USDC", "42.5")
+    paper = build_run_settings(["BTC-USDC"], True, 500, live=False)
+    live = build_run_settings(["BTC-USDC"], True, 500, live=True)
+    assert paper.capital == "42.5"
+    assert paper.order_limit == "10"
+    assert paper.loss_stop == "20"
+    assert live.capital == "100"
+    monkeypatch.setenv("PAPER_STARTING_USDC", "101")
+    with pytest.raises(ValueError, match="Maximum capital"):
+        build_run_settings(["BTC-USDC"], True, 500, live=False)
+
+
+def test_preflight_model_load_checks_full_graph_and_decoder(monkeypatch):
+    from types import SimpleNamespace
+
+    import stonkfly.data
+    import stonkfly.neural.controller
+
+    monkeypatch.setattr(
+        stonkfly.data,
+        "verify",
+        lambda: {
+            "neurons": 166700,
+            "directed_edges": 25582938,
+            "arrays_verified": True,
+        },
+    )
+    fake = SimpleNamespace(
+        brain=SimpleNamespace(n=166700, post=range(25582938)),
+        decoder=SimpleNamespace(left=[1], right=[2], gate=[3, 4]),
+    )
+    monkeypatch.setattr(
+        stonkfly.neural.controller, "FlyController", lambda settings: fake
+    )
+
+    model = load_model_for_preflight(Settings())
+
+    assert model["name"] == "MaleCNS v1.0"
+    assert model["loaded"] is True
+    assert model["neurons"] == 166700
+    assert model["directed_edges"] == 25582938
+    assert model["decoder_outputs"] == {"left": 1, "right": 1, "gate": 2}
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -109,11 +155,65 @@ def test_agentkit_paper_accounting_and_cooldown(env):
     assert r["status"] == "FILLED"
     assert l.cash == D("100") - D(r["quote"]) - D(r["fee"])
     assert l.positions["BTC-USDC"] == D(r["base"])
+    trade = l.db.execute(
+        "SELECT side,asset,price,quantity,fee,reason,cash_balance,"
+        "realized_pnl,unrealized_pnl FROM paper_trades"
+    ).fetchone()
+    assert trade[:2] == ("BUY", "BTC-USDC")
+    assert D(trade[2]) == D(r["quote"]) / D(r["base"])
+    assert D(trade[3]) == D(r["base"])
+    assert D(trade[4]) == D(r["fee"])
+    assert "Stonkfly neural decoder proposed BUY" in trade[5]
+    assert D(trade[6]) == l.cash
+    assert D(trade[7]) == 0
+    assert D(trade[8]) < 0
     assert reinforcement(l.equity(provider.quotes), "100", ".01")[0] == "aversive"
     with pytest.raises(Veto):
         a.invoke({"product": "BTC-USDC", "side": "BUY"})
     with pytest.raises(ValidationError):
         a.invoke({"product": "BTC-USDC", "side": "BUY", "size": 99})
+
+
+def test_paper_buy_sell_realized_and_unrealized_accounting(env):
+    s, l, g = env
+    provider = StonkflyActions(g, PaperBroker(s, l))
+    provider.quotes = {"BTC-USDC": quote()}
+    action = provider.get_actions()[0]
+    buy = action.invoke({"product": "BTC-USDC", "side": "BUY"})
+    assert buy["status"] == "FILLED"
+    l.put("last_attempt", time.time() - s.interval_seconds - 1)
+    provider.quotes = {"BTC-USDC": quote(bid=D("101"), ask=D("101.1"))}
+    sell = action.invoke({"product": "BTC-USDC", "side": "SELL"})
+    assert sell["status"] == "FILLED"
+    assert l.positions["BTC-USDC"] == 0
+    assert D(l.get("realized_pnl")) < 0
+    rows = l.db.execute(
+        "SELECT side,realized_pnl,cumulative_realized_pnl FROM paper_trades ORDER BY rowid"
+    ).fetchall()
+    assert [row[0] for row in rows] == ["BUY", "SELL"]
+    assert D(rows[1][1]) == D(rows[1][2]) < 0
+
+
+def test_paper_stop_vetoes_before_simulated_fill(env):
+    s, l, g = env
+    provider = StonkflyActions(g, PaperBroker(s, l))
+    provider.quotes = {"BTC-USDC": quote()}
+    g.stop_file.touch()
+    with pytest.raises(Veto, match="STOP"):
+        provider.get_actions()[0].invoke({"product": "BTC-USDC", "side": "BUY"})
+    assert l.cash == D("100")
+    assert l.positions.get("BTC-USDC", D(0)) == 0
+    assert l.db.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+
+def test_paper_broker_rejects_live_ledger(tmp_path):
+    settings = Settings()
+    ledger = Ledger(tmp_path / "live.sqlite", settings, "live")
+    try:
+        with pytest.raises(RuntimeError, match="paper ledger"):
+            PaperBroker(settings, ledger)
+    finally:
+        ledger.close()
 
 
 def test_daily_attempt_limit(env):
@@ -123,18 +223,20 @@ def test_daily_attempt_limit(env):
         g.plan("BTC-USDC", "BUY", {"BTC-USDC": quote()})
 
 
-def test_crash_recovery_and_exactly_once_paper(env):
+def test_crash_recovery_rejects_unchecked_paper_intent(env):
     s, l, g = env
     p = l.reserve(g.plan("BTC-USDC", "BUY", {"BTC-USDC": quote()}), time.time())
     path = l.path
     other = Ledger(path, s, "paper")
     broker = PaperBroker(s, other)
     broker.reconcile()
-    cash = other.cash
     broker.reconcile()
-    assert other.cash == cash
-    with pytest.raises(RuntimeError, match="changed"):
-        other.settle(p["client_order_id"], "0", "0", "0")
+    assert other.cash == D("100")
+    assert other.positions.get("BTC-USDC", D(0)) == 0
+    assert other.db.execute(
+        "SELECT status FROM orders WHERE id=?", (p["client_order_id"],)
+    ).fetchone()[0] == "REJECTED"
+    assert other.db.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
     other.close()
 
 
@@ -233,6 +335,42 @@ def live_double(env):
     provider = StonkflyActions(g, broker)
     provider.quotes = {"BTC-USDC": quote()}
     return sdk, broker, provider
+
+
+def test_preflight_reports_verified_permissions_balance_and_open_orders(env):
+    s, l, _ = env
+    sdk = SDK()
+    broker = CoinbaseBroker(s, l, sdk, "test-portfolio")
+
+    report = broker.preflight()
+
+    assert {check["name"]: check["status"] for check in report["checks"]} == {
+        "Coinbase API connection": "PASS",
+        "API permissions": "PASS",
+        "Order permissions": "PASS",
+        "Portfolio scope": "PASS",
+        "Portfolio account access": "PASS",
+        "Open order state": "PASS",
+        "Available trading balance": "PASS",
+        "Account and open-order reconciliation": "PASS",
+    }
+    assert report["values"]["available_usdc"] == "100"
+
+
+def test_preflight_reports_zero_balance_without_submitting(env):
+    s, l, _ = env
+    sdk = SDK()
+    sdk.cash = D(0)
+    broker = CoinbaseBroker(s, l, sdk, "test-portfolio")
+
+    with pytest.raises(RuntimeError, match="Fund dedicated portfolio"):
+        broker.preflight()
+
+    checks = {check["name"]: check for check in broker.preflight_checks}
+    assert checks["Available trading balance"]["status"] == "FAIL"
+    assert checks["Open order state"]["status"] == "PASS"
+    assert broker.preflight_values["available_usdc"] == "0"
+    assert sdk.submissions == 0
 
 
 def test_advanced_fok_and_reconciled_balances(env):

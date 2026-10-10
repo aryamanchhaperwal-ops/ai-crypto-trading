@@ -8,7 +8,7 @@ The engine converts public Coinbase price observations into an RGB chart and pre
 
 Positive portfolio P&L stimulates identified PAM11 dopamine cells, while negative P&L stimulates PPL101 cells. A candidate memory rule adjusts existing KC-to-MBON connections. These are engineered reinforcement signals, not modeled pain receptors. Synaptic changes do not demonstrate profitable learning. See [model and evidence](docs/model.md).
 
-The browser dashboard is read-only. It displays recorded neural activity, the visual input, trading decisions, portfolio data, and charts from a run directory. It does not place orders or change trading state.
+The browser dashboard displays recorded neural activity, the visual input, trading decisions, portfolio data, and charts from a run directory. It includes a paper-portfolio panel with local start/stop controls and a separate LIVE READINESS / PREFLIGHT action that never submits, cancels, or modifies Coinbase orders. See [operations](docs/operations.md).
 
 ## Install and run
 
@@ -19,12 +19,12 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e '.[test]'
 python -m stonkfly prepare
-python -m stonkfly run
+python -m stonkfly run --paper
 ```
 
-The default is paper trading with real public BTC-USDC prices and a simulated 100 USDC balance. No API key is needed. Runtime logs, sensory images, and resumable neural state are stored locally in `runs/paper/`. Press Ctrl-C to stop; running the same command resumes the run.
+The default is paper trading with real public BTC-USDC prices and a simulated 100 USDC balance. Set `PAPER_STARTING_USDC` locally to configure the simulated starting balance (maximum 100 USDC); it does not access or fund Coinbase. No API key is needed. Runtime logs, simulated fills, sensory images, and resumable neural state are stored locally in `runs/paper/`. Stop through the dashboard's emergency paper stop or `python -m stonkfly paper-stop --out runs/paper`.
 
-To view recorded paper activity, start the read-only dashboard in a second terminal:
+To view recorded paper activity and the live-readiness panel, start the dashboard in a second terminal:
 
 ```sh
 python dashboard/server.py runs/paper

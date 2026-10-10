@@ -10,18 +10,22 @@ Existing DOOMFLY researchers can reuse verified local files with `python -m ston
 
 ## Paper modes
 
+Paper runs use the same Stonkfly engine, decoder, and execution guard as live mode, but route accepted proposals only to the isolated `PaperBroker`. No Coinbase execution client is constructed in this mode. Configure the simulated starting cash locally with `PAPER_STARTING_USDC` (default `100`, maximum `100`); it affects paper ledgers only. It never reads or funds the Coinbase portfolio.
+
 ```sh
 # Real public prices; simulated fills and 0.6% fee per side.
-python -m stonkfly run --steps 10
+python -m stonkfly run --paper --steps 10
 
 # Explicit synthetic offline market, accelerated development run.
-python -m stonkfly run --fixture --fast --steps 10 --out runs/fixture
+python -m stonkfly run --paper --fixture --fast --steps 10 --out runs/fixture
 
 # Frozen-memory control, always in a separate run directory.
-python -m stonkfly run --fixture --fast --frozen --steps 10 --out runs/frozen
+python -m stonkfly run --paper --fixture --fast --frozen --steps 10 --out runs/frozen
 ```
 
 `--fast` skips wall waits only in paper mode. It preserves the 0.1 ms neural timestep and the real 60-second execution cooldown, so an accelerated probe can have many rejected trades. This is a plumbing/neural test, not a backtest of achievable market returns. Paper fills use observed bid/ask plus the configured fee; they do not simulate depth, queue position or all market impact. `--fixture` never claims real market data.
+
+Start an ongoing paper run with `python -m stonkfly run --paper --out runs/paper`. Stop new simulated orders with `python -m stonkfly paper-stop --out runs/paper` or by creating `runs/paper/STOP`. The STOP switch remains latched after the worker exits; inspect the run, then remove the STOP file explicitly before restarting. A prepared paper intent interrupted before the final risk gate is rejected at recovery rather than replayed.
 
 ## Coinbase setup, performed by you
 
@@ -32,6 +36,18 @@ python -m stonkfly run --fixture --fast --frozen --steps 10 --out runs/frozen
 5. Run `python -m stonkfly run --live --preflight-only`. This reads permissions, account balances and order state, and initializes the local ledger. **It does not submit orders.** Once you have reviewed the configuration, run `python -m stonkfly run --live` yourself.
 
 The key must be allowed to trade the requested pairs in your region. Defaults use BTC-USDC; ETH-USDC and SOL-USDC are optional via `--products`. Only available spot products pass checks. Coinbase preview warnings, unsupported order types or insufficient fee coverage stop the order; there is no fallback to an unbounded market order.
+
+## Live-readiness dashboard
+
+Start the existing dashboard from the repository root:
+
+```sh
+python dashboard/server.py runs/paper
+```
+
+The LIVE READINESS / PREFLIGHT panel reads the live run state and the latest local `runs/live/preflight.json` report. Its RUN PREFLIGHT button invokes the existing `python -m stonkfly run --live --preflight-only` command. That command checks account permissions, portfolio scope, balances, open orders, risk/order limits, and public market data; it does not submit, cancel, or modify exchange orders. It reports zero submitted orders. A passing preflight does not start the trading engine or enable live trading.
+
+The dashboard's RUN PREFLIGHT, START PAPER, and EMERGENCY PAPER STOP actions are restricted to a loopback client and a local page origin. Keep the dashboard bound to `127.0.0.1`; setting `HOST=0.0.0.0` exposes dashboard data to the LAN but does not enable remote actions. The paper panel reads the separate paper ledger and trade log, including cash, positions, realized/unrealized P&L, latest neural decision, and risk/execution outcome. Starting paper mode always invokes `python -m stonkfly run --paper`; it never falls back to live execution. A live ledger cannot be started or stopped with the paper controls.
 
 ## Execution guarantees and limits
 
@@ -48,7 +64,7 @@ The worker must stay running on your computer/server. It is not a hosted service
 
 `runs/<name>/` holds a SQLite ledger, two alternating checkpoints, `events.jsonl`, `latest.json`, `latest-input.png`, and provenance with exact code, graph, stimulus and parameter hashes. Each intent binds to the preceding neural observation and checkpoint. The ledger is authoritative if a crash occurs before the human-readable log is written.
 
-To stop: Ctrl-C, or `touch runs/live/STOP` (`runs/paper/STOP` for paper). This stops future decisions/submissions; an already submitted FOK order may still finish. Inspect any uncertain order in Coinbase before taking another action.
+To stop live mode: Ctrl-C, or create `runs/live/STOP`. For paper mode, use `python -m stonkfly paper-stop --out runs/paper` or the dashboard emergency stop. This stops future decisions/submissions; an already submitted live FOK order may still finish. Inspect any uncertain live order in Coinbase before taking another action.
 
 For an ordinary clean restart, use the same command and run directory. After reviewing a transient failure and reconciling account state, remove the STOP file if appropriate and pass `--resume-reviewed`. This cannot clear a drawdown or fee-overrun stop, bypass unresolved exchange outcomes, or accept changed source/configuration. A missing unknown order requires manual exchange investigation; do not assume it failed. Source changes require an explicitly reviewed state migration; use a fresh **paper** directory for development.
 

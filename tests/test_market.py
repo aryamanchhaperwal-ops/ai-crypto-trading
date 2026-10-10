@@ -17,6 +17,22 @@ class PublicSDK:
             ]
         }
 
+    def get_public_products(self):
+        return {
+            "products": [
+                {
+                    "product_id": "BTC-USDC",
+                    "product_type": "SPOT",
+                    "quote_currency_id": "USDC",
+                    "base_increment": ".00000001",
+                    "quote_increment": ".01",
+                    "quote_min_size": "1",
+                    "base_min_size": ".00000001",
+                    "price": "100.05",
+                }
+            ]
+        }
+
     def get_public_product(self, product):
         return {
             "product_id": product,
@@ -72,3 +88,33 @@ def test_public_client_cannot_inherit_credentials(monkeypatch):
     monkeypatch.setattr(coinbase.rest, "RESTClient", factory)
     CoinbaseMarket(("BTC-USDC",)).snapshot()
     assert observed["api_key"] is None and observed["api_secret"] is None
+
+def test_market_discovery():
+    from stonkfly.market import discover_markets
+    class MockClient:
+        def get_public_products(self):
+            return {
+                "products": [
+                    {"product_id": "BTC-USD", "product_type": "SPOT", "quote_currency_id": "USD", "base_currency_id": "BTC", "is_disabled": False, "approximate_quote_24h_volume": "1000"},
+                    {"product_id": "ETH-USDC", "product_type": "SPOT", "quote_currency_id": "USDC", "base_currency_id": "ETH", "is_disabled": False, "approximate_quote_24h_volume": "2000"},
+                    {"product_id": "DOGE-USD", "product_type": "SPOT", "quote_currency_id": "USD", "is_disabled": True, "approximate_quote_24h_volume": "500"},
+                    {"product_id": "FUT-USD", "product_type": "FUTURE", "quote_currency_id": "USD", "base_currency_id": "BTC", "is_disabled": False, "approximate_quote_24h_volume": "5000"}
+                ]
+            }
+    
+    markets = discover_markets(MockClient(), limit=50)
+    assert markets == ["ETH-USDC", "BTC-USD"]
+
+def test_market_discovery_limit():
+    from stonkfly.market import discover_markets
+    class MockClient:
+        def get_public_products(self):
+            return {
+                                "products": [
+                    {"product_id": f"COIN{i}-USD", "product_type": "SPOT", "quote_currency_id": "USD", "base_currency_id": f"COIN{i}", "is_disabled": False, "approximate_quote_24h_volume": str(100 - i)}
+                    for i in range(100)
+                ]
+            }
+    markets = discover_markets(MockClient(), limit=50)
+    assert len(markets) == 50
+    assert markets[0] == "COIN0-USD"

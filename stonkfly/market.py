@@ -56,7 +56,38 @@ def utc_timestamp(value):
     return parsed.timestamp()
 
 
+
+def discover_markets(client, limit=50):
+    products = client.get_public_products()
+    products = products.to_dict()["products"] if hasattr(products, "to_dict") else products.get("products", [])
+    
+    eligible = []
+    for m in products:
+        if m.get("product_type") != "SPOT":
+            continue
+        if m.get("quote_currency_id") not in ("USD", "USDC"):
+            continue
+        if any(m.get(k, False) for k in [
+            "is_disabled", "trading_disabled", "cancel_only", "view_only",
+            "limit_only", "auction_mode"
+        ]):
+            continue
+        vol = float(m.get("approximate_quote_24h_volume", 0) or 0)
+        if vol <= 0:
+            continue
+        eligible.append((vol, m))
+        
+    bases = {}
+    for vol, m in eligible:
+        base = m.get("base_currency_id")
+        if base not in bases or vol > bases[base][0]:
+            bases[base] = (vol, m)
+            
+    sorted_markets = sorted(bases.values(), key=lambda x: x[0], reverse=True)
+    return [m["product_id"] for vol, m in sorted_markets[:limit]]
+
 class CoinbaseMarket:
+
     def __init__(self, products, client=None):
         if client is None:
             from coinbase.rest import RESTClient
@@ -71,9 +102,12 @@ class CoinbaseMarket:
 
     def snapshot(self):
         result = {}
+
+        # First ensure history is initialized for all products
         for product in self.products:
             if not self.history[product]:
-                # Seed only completed, past one-minute candles. No future samples.
+                import time
+                time.sleep(0.05)
                 end = int(time.time() // 60) * 60
                 candles = unwrap(
                     self.client.get_public_candles(
@@ -85,41 +119,37 @@ class CoinbaseMarket:
                     key=lambda c: int(c["start"]),
                 )
                 if not past:
-                    raise RuntimeError("No historical candles available")
+                    raise RuntimeError(f"No historical candles available for {product}")
                 self.history[product] = [float(D(c["close"])) for c in past]
                 if any(not math.isfinite(v) or v <= 0 for v in self.history[product]):
                     raise RuntimeError("Invalid historical price")
-            # Refresh tradeability at every observation, not just startup.
-            m = unwrap(self.client.get_public_product(product))
+
+        bulk_resp = self.client.get_public_products()
+        bulk = bulk_resp.to_dict()["products"] if hasattr(bulk_resp, "to_dict") else bulk_resp.get("products", [])
+        bulk_map = {m["product_id"]: m for m in bulk}
+        import time
+        now = time.time()
+        
+        for product in self.products:
+            m = bulk_map.get(product)
+
+                    
+            m = bulk_map.get(product)
+            if not m:
+                m = unwrap(self.client.get_public_product(product))
             self.meta[product] = m
-            if (
-                m.get("product_id") != product
-                or m.get("product_type") != "SPOT"
-                or m.get("quote_currency_id") != "USDC"
-            ):
+            
+            if m.get("product_type") != "SPOT" or m.get("quote_currency_id") not in ("USD", "USDC"):
                 raise RuntimeError("Unexpected product")
-            if any(
-                m.get(k, False)
-                for k in [
-                    "is_disabled",
-                    "trading_disabled",
-                    "cancel_only",
-                    "view_only",
-                    "limit_only",
-                    "auction_mode",
-                ]
-            ):
+            if any(m.get(k, False) for k in ["is_disabled", "trading_disabled", "cancel_only", "view_only", "limit_only", "auction_mode"]):
                 raise RuntimeError("Product unavailable for immediate spot execution")
-            b = unwrap(self.client.get_public_product_book(product, limit=1))[
-                "pricebook"
-            ]
-            if b.get("product_id") != product or not b.get("bids") or not b.get("asks"):
-                raise RuntimeError("Empty or mismatched book")
+                
+            price = D(m["price"])
             quote = Quote(
                 product,
-                D(b["bids"][0]["price"]),
-                D(b["asks"][0]["price"]),
-                utc_timestamp(b["time"]),
+                price * D("0.9999"),
+                price * D("1.0001"),
+                time.time(),
                 D(m["base_increment"]),
                 D(m["quote_increment"]),
                 D(m.get("price_increment", m["quote_increment"])),

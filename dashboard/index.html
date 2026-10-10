@@ -42,6 +42,34 @@ header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 20px;margin-bott
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
 .card h2{font-size:14px;margin:0 0 2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;text-wrap:balance}
 .card .sub{color:var(--mute);font-size:12.5px;margin:0 0 8px;text-wrap:pretty}
+.readiness{margin:0 0 14px;border-color:#405273}
+.readiness-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.readiness-head h2{margin-right:auto;font-size:17px}
+.readiness-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin:10px 0}
+.readiness-grid>div{min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+.readiness-grid span{display:block;color:var(--mute);font-size:11px}
+.readiness-grid strong{display:block;font-size:12.5px;overflow-wrap:anywhere}
+.ready-pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:2px 9px;font-size:12px;font-weight:700}
+.ready-PASS{color:var(--buy);border-color:var(--buy)}
+.ready-FAIL{color:var(--sell);border-color:var(--sell)}
+.ready-BLOCKED,.ready-UNKNOWN{color:var(--amber);border-color:var(--amber)}
+.ready-OFF{color:var(--mute)}
+.readiness-checks{overflow-x:auto}
+.readiness-checks table{width:100%;border-collapse:collapse;font-size:12px}
+.readiness-checks th,.readiness-checks td{text-align:left;border-top:1px solid var(--line);padding:5px 8px;vertical-align:top}
+.readiness-checks th{color:var(--mute);font-weight:600}
+.readiness-checks td:nth-child(2){white-space:nowrap}
+.readiness-error{color:var(--sell);min-height:1.5em}
+.paper-panel{margin:0 0 14px;border-color:var(--buy)}
+.paper-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.paper-head h2{margin-right:auto;font-size:17px}
+.paper-stop{border-color:var(--sell);color:var(--sell)}
+.paper-trades{overflow-x:auto}
+.paper-trades table{width:100%;border-collapse:collapse;font-size:12px}
+.paper-trades th,.paper-trades td{text-align:left;border-top:1px solid var(--line);padding:5px 8px;vertical-align:top}
+.paper-trades th{color:var(--mute);font-weight:600;white-space:nowrap}
+.paper-trades td{font-variant-numeric:tabular-nums}
+.paper-trades td:last-child{min-width:220px}
 .brainbox{position:relative;width:100%;aspect-ratio:4/3;max-width:100%;border-radius:8px;overflow:hidden;background:#04070e;cursor:grab;touch-action:none}
 .brainbox canvas{position:absolute;inset:0;width:100%;height:100%}
 .brainbox.fx-reward{animation:flashG 2.2s ease-out}
@@ -144,12 +172,74 @@ body.staged .foot{margin-bottom:16px}
 <body>
 <div id="toasts" aria-live="polite"></div>
 <div class="wrap">
+<section class="card readiness" aria-labelledby="readinessTitle">
+  <div class="readiness-head">
+    <h2 id="readinessTitle">LIVE READINESS / PREFLIGHT</h2>
+    <span class="ready-pill ready-UNKNOWN" id="preflightBadge">UNKNOWN</span>
+    <button class="accent" id="runPreflight" type="button">RUN PREFLIGHT</button>
+  </div>
+  <p class="sub">LIVE-only checks for Coinbase authentication, account permissions, portfolio balance and public market data. They never submit, cancel, or modify an order. A live preflight failure (including zero Coinbase USDC) does not halt or gate the separate PAPER MODE / SIMULATION portfolio below; passing preflight does not enable live trading.</p>
+  <div class="readiness-grid" aria-live="polite">
+    <div><span>Live-system status</span><strong id="readySystem">UNKNOWN</strong></div>
+    <div><span>Model name / loaded</span><strong id="readyModel">UNKNOWN</strong></div>
+    <div><span>Coinbase API connection</span><strong id="readyConnection">UNKNOWN</strong></div>
+    <div><span>Coinbase account / portfolio</span><strong id="readyPortfolio">UNKNOWN</strong></div>
+    <div><span>Available trading balance</span><strong id="readyBalance">UNKNOWN</strong></div>
+    <div><span>Market-data connection</span><strong id="readyMarket">UNKNOWN</strong></div>
+    <div><span>API / order permissions</span><strong id="readyPermissions">UNKNOWN</strong></div>
+    <div><span>Risk controls</span><strong id="readyRisk">UNKNOWN</strong></div>
+    <div><span>Order limits</span><strong id="readyLimits">UNKNOWN</strong></div>
+    <div><span>Live preflight mode</span><strong id="readyMode">UNKNOWN</strong></div>
+    <div><span>Last preflight timestamp</span><strong id="readyTimestamp">UNKNOWN</strong></div>
+    <div><span>Last preflight result</span><strong id="readyResult">UNKNOWN</strong></div>
+    <div><span>Orders submitted by preflight</span><strong id="readyOrders">UNKNOWN</strong></div>
+    <div><span>LIVE TRADING</span><strong id="readyLiveTrading">OFF</strong></div>
+  </div>
+  <div class="readiness-checks">
+    <table>
+      <thead><tr><th>Preflight check</th><th>Status</th><th>Details</th></tr></thead>
+      <tbody id="preflightChecks"><tr><td colspan="3">No preflight result is available.</td></tr></tbody>
+    </table>
+  </div>
+  <p class="readiness-error" id="readinessError" role="status" aria-live="polite"></p>
+</section>
+<section class="card paper-panel" aria-labelledby="paperTitle">
+  <div class="paper-head">
+    <h2 id="paperTitle">PAPER MODE / SIMULATION</h2>
+    <span class="ready-pill ready-UNKNOWN" id="paperBadge">UNKNOWN</span>
+    <button class="accent" id="paperStart" type="button">START PAPER</button>
+    <button class="paper-stop" id="paperStop" type="button">EMERGENCY PAPER STOP</button>
+  </div>
+  <p class="sub">Runs the existing Stonkfly engine with a separate simulated portfolio. Paper execution cannot submit Coinbase orders. An emergency STOP stays latched until an operator reviews and clears the local STOP file.</p>
+  <div class="readiness-grid" aria-live="polite">
+    <div><span>Mode</span><strong id="paperMode">UNKNOWN</strong></div>
+    <div><span>Trading status</span><strong id="paperStatus">UNKNOWN</strong></div>
+    <div><span>Starting simulated balance</span><strong id="paperStarting">UNKNOWN</strong></div>
+    <div><span>Simulated cash</span><strong id="paperCash">UNKNOWN</strong></div>
+    <div><span>Portfolio equity</span><strong id="paperEquity">UNKNOWN</strong></div>
+    <div><span>Current positions</span><strong id="paperPositions">UNKNOWN</strong></div>
+    <div><span>Realized P&amp;L</span><strong id="paperRealized">UNKNOWN</strong></div>
+    <div><span>Unrealized P&amp;L</span><strong id="paperUnrealized">UNKNOWN</strong></div>
+    <div><span>Net P&amp;L</span><strong id="paperNetPnl">UNKNOWN</strong></div>
+    <div><span>Open positions / closed sell fills</span><strong id="paperOpenClosed">UNKNOWN</strong></div>
+    <div><span>Latest AI decision</span><strong id="paperDecision">UNKNOWN</strong></div>
+    <div><span>Risk status</span><strong id="paperRisk">UNKNOWN</strong></div>
+    <div><span>LIVE TRADING</span><strong id="paperLive">UNKNOWN</strong></div>
+  </div>
+  <p class="readiness-error" id="paperError" role="status" aria-live="polite"></p>
+  <div class="paper-trades">
+    <table>
+      <thead><tr><th>Timestamp</th><th>Asset</th><th>Side</th><th>Price</th><th>Quantity</th><th>Fee</th><th>Simulated cash</th><th>Portfolio equity</th><th>Realized P&amp;L</th><th>Unrealized P&amp;L</th><th>Signal / reason</th></tr></thead>
+      <tbody id="paperTrades"><tr><td colspan="11">No simulated fills have been recorded.</td></tr></tbody>
+    </table>
+  </div>
+</section>
 <div class="stage-fit" id="stageFit"><div class="stage" id="stage">
 <header>
   <div class="identity"><strong>AI CRYPTO TRADING AGENT</strong><span>Autonomous Crypto Trading System</span></div>
-  <span class="pill" title="This page only reads trading records. It cannot place orders or change any state."><span aria-hidden="true">🔒</span> Read-only</span>
+  <span class="pill" title="Paper actions use simulated fills only; live Coinbase orders remain disabled in paper mode."><span aria-hidden="true">🔒</span> Paper simulation · live orders disabled</span>
   <span class="stat">Tick <strong id="tick">–</strong></span>
-  <span class="stat">Paper equity <strong id="equity">–</strong> USDC</span>
+  <span class="stat"><span id="equityLabel">Account equity</span> <strong id="equity">–</strong> USDC</span>
   <span class="stat"><span class="coin" translate="no">–</span> <strong id="price">–</strong></span>
   <span class="stat">Next step <strong id="next">–</strong></span>
   <span class="stat">Step compute time <strong id="compute">–</strong></span>
@@ -225,7 +315,7 @@ body.staged .foot{margin-bottom:16px}
 
 </div></div><!-- /stage -->
 <div class="charts">
-  <div class="card"><h2><span aria-hidden="true">📈</span> <span class="coin" translate="no">–</span> price and paper equity</h2><p class="sub">Blue: <span class="coin" translate="no">–</span> bid; yellow: paper account equity (right axis). ▲ Buy ▼ Sell</p><div id="cPrice"></div></div>
+  <div class="card"><h2><span aria-hidden="true">📈</span> <span class="coin" translate="no">–</span> price and <span id="equityChartTitle">account equity</span></h2><p class="sub">Blue: <span class="coin" translate="no">–</span> bid; yellow: <span id="equityChartSub">account equity</span> (right axis). ▲ Buy ▼ Sell</p><div id="cPrice"></div></div>
   <div class="card"><h2><span aria-hidden="true">↔</span> Left–right <span translate="no">DNp20</span> firing difference (Hz)</h2><p class="sub">Dashed lines mark the ±2&nbsp;Hz thresholds; dot color shows the decision (gray means the gate was closed or the difference was too small).</p><div id="cDiff"></div></div>
   <div class="card"><h2><span aria-hidden="true">💊</span> Dopamine activity</h2><p class="sub">Green: PAM11 reward; red: PPL101 aversive response (increases only after a P&amp;L stimulus).</p><div id="cDA"></div></div>
   <div class="card"><h2><span aria-hidden="true">🧬</span> Memory synapse changes</h2><p class="sub">Purple: changed KC→MBON synapses (7,835 total); cyan: mean strength (1 = baseline).</p><div id="cMem"></div></div>
@@ -234,7 +324,7 @@ body.staged .foot{margin-bottom:16px}
 </div>
 
 <p class="foot">
-Data source: <span id="runpath"></span> (read-only paper trading). Checked every 4&nbsp;seconds; the animation and dashboard update when a new step appears.<br>
+Data source: <span id="runpath"></span> (run records are read-only; preflight is no-trade). Checked every 4&nbsp;seconds; the animation and dashboard update when a new step appears.<br>
 Animation: the program records only each neuron's spike count per 0.5-second step, not the timing of individual spikes. The propagation order is illustrative, based on synaptic distance from the eyes; flash rates reflect the previous step's observed activity (at 8× slow motion).<br>
 Important: “buy/sell neurons” and “profit/loss dopamine” are human-defined interfaces. The connections come from a real fly connectome, but the neural dynamics and learning rules have not been biologically validated and are not proven profitable.
 </p>
@@ -271,7 +361,7 @@ function famOf(s){
   if (s.startsWith('cb_') || s === 'ENS') return 1;
   return 3;
 }
-const EXEC = {FILLED:'Filled (paper)', VETO:'Vetoed by risk controls', HOLD:'No order placed', REJECTED:'Rejected'};
+const EXEC = {FILLED:'Filled', VETO:'Vetoed by risk controls', HOLD:'No order placed', REJECTED:'Rejected'};
 const REASON = {
   'Price moved beyond neural observation tolerance':'Price moved beyond the neural observation tolerance',
   'Order cooldown':'Order cooldown (at least 60&nbsp;seconds between orders)',
@@ -800,6 +890,11 @@ function setBar(id, v, max, color){ const el = $(id); el.style.width = Math.min(
 function drawPanels(){
   const ev = STATE.events, e = ev[ev.length - 1], lg = STATE.ledger || {};
   $('#runpath').textContent = STATE.run;
+  const liveRun = lg.mode === 'live';
+  const equityLabel = liveRun ? 'Live equity' : 'Paper equity';
+  $('#equityLabel').textContent = equityLabel;
+  $('#equityChartTitle').textContent = equityLabel.toLowerCase();
+  $('#equityChartSub').textContent = (liveRun ? 'live' : 'paper') + ' account equity';
   if (!e) return;
   $('#tick').textContent = e.tick;
   $('#equity').textContent = e.equity.toFixed(2);
@@ -808,7 +903,8 @@ function drawPanels(){
   $('#price').textContent = fmtPrice(+e.bid);
   $('#compute').textContent = e.compute.toFixed(1) + ' s';
   $('#side').textContent = SIDE_LABELS[e.side]; $('#side').className = 'big ' + e.side + (e.execution === 'VETO' ? ' vetoed' : '');
-  $('#exec').innerHTML = `Execution: <strong${e.execution === 'VETO' ? ' class="veto"' : ''}>${EXEC[e.execution] || e.execution}</strong>` + (e.reason ? `<br>${REASON[e.reason] || e.reason}` : '') +
+  const executionLabel = e.execution === 'FILLED' ? `Filled (${liveRun ? 'live' : 'paper'})` : EXEC[e.execution] || e.execution;
+  $('#exec').innerHTML = `Execution: <strong${e.execution === 'VETO' ? ' class="veto"' : ''}>${executionLabel}</strong>` + (e.reason ? `<br>${REASON[e.reason] || e.reason}` : '') +
     `<br>Cash: ${(+lg.cash || 0).toFixed(2)} USDC` + (lg.positions && Object.keys(lg.positions).length ? ` · Holdings: ${Object.entries(lg.positions).map(([k, v]) => `${fmtQty(+v)} ${k.split('-')[0]}`).join(', ')}` : '');
   const hzMax = Math.max(20, e.left_hz, e.right_hz);
   setBar('#barL', e.left_hz, hzMax); setBar('#barR', e.right_hz, hzMax);
@@ -823,6 +919,183 @@ function drawPanels(){
   $('#numRw').textContent = e.reward_spikes; $('#numAv').textContent = e.aversive_spikes; $('#numKC').textContent = e.kc_spikes.toLocaleString();
   $('#eyeSub').textContent = eye.only ? 'What the fly actually sees: each dot is a photoreceptor; white dots detect brightness (R1–R6), and blue/green dots detect color (R8).' : 'The input price chart (translucent) is overlaid with each photoreceptor’s view; brightness represents perceived light. The image scans from left to right when a new step arrives.';
 }
+
+const readinessStatus = status => ['PASS', 'FAIL', 'BLOCKED'].includes(status) ? status : 'UNKNOWN';
+function readinessCheck(report, ...names){
+  return (report && report.checks || []).find(c => names.includes(c.name));
+}
+function setReadinessValue(id, value){
+  $(id).textContent = value == null || value === '' ? 'UNKNOWN' : String(value);
+}
+function renderReadiness(data){
+  const report = data.preflight, runtime = data.runtime || {}, model = runtime.model || {};
+  const checks = report && report.checks || [];
+  const find = (...names) => readinessCheck(report, ...names);
+  const statusOf = c => c ? readinessStatus(c.status) : 'UNKNOWN';
+  const textOf = c => c ? `${readinessStatus(c.status)} — ${c.detail}` : 'UNKNOWN';
+  setReadinessValue('#readySystem', runtime.system_status
+    ? `${runtime.system_status}${runtime.system_detail ? ` — ${runtime.system_detail}` : ''}`
+    : 'UNKNOWN');
+  const modelLoaded = model.loaded === true ? 'yes' : model.loaded === false ? 'no' : 'unknown';
+  setReadinessValue('#readyModel', model.name ? `${model.name} — ${model.status} (loaded: ${modelLoaded})` : 'UNKNOWN');
+  setReadinessValue('#readyConnection', textOf(find('Coinbase API connection')));
+  const portfolio = find('Portfolio scope');
+  const values = report && report.values || {};
+  setReadinessValue('#readyPortfolio', portfolio
+    ? `${portfolio.status} — ${values.portfolio || 'Configured Coinbase portfolio'}`
+    : 'UNKNOWN');
+  const balances = values.available_balances;
+  let balance = 'UNKNOWN';
+  if (values.available_usdc != null) {
+    const others = Object.entries(balances || {}).filter(([currency]) => currency !== 'USDC');
+    balance = `${values.available_usdc} USDC available` + (others.length ? ` · ${others.map(([currency, amount]) => `${currency} ${amount}`).join(', ')}` : '');
+  }
+  setReadinessValue('#readyBalance', balance);
+  const market = find('Market-data access');
+  setReadinessValue('#readyMarket', textOf(market));
+  const apiPermissions = find('API permissions'), orderPermissions = find('Order permissions');
+  setReadinessValue('#readyPermissions', apiPermissions && orderPermissions
+    ? `${apiPermissions.status} — ${apiPermissions.detail}; ${orderPermissions.status} — ${orderPermissions.detail}`
+    : 'UNKNOWN');
+  setReadinessValue('#readyRisk', textOf(find('Risk controls')));
+  setReadinessValue('#readyLimits', textOf(find('Order limits')));
+  setReadinessValue('#readyMode', values.mode || runtime.mode);
+  let timestamp = 'UNKNOWN';
+  if (report && report.timestamp) {
+    const parsed = new Date(report.timestamp);
+    timestamp = Number.isNaN(parsed.getTime()) ? report.timestamp : parsed.toLocaleString();
+  }
+  setReadinessValue('#readyTimestamp', timestamp);
+  setReadinessValue('#readyResult', report ? report.result : 'UNKNOWN');
+  setReadinessValue('#readyOrders', report ? String(report.orders_submitted) : 'UNKNOWN');
+  setReadinessValue('#readyLiveTrading', data.live_trading || 'UNKNOWN');
+  const badge = $('#preflightBadge');
+  const result = report ? readinessStatus(report.result) : 'UNKNOWN';
+  badge.textContent = result;
+  badge.className = `ready-pill ready-${result}`;
+  const tbody = $('#preflightChecks');
+  tbody.replaceChildren();
+  if (!checks.length) {
+    const row = document.createElement('tr'), cell = document.createElement('td');
+    cell.colSpan = 3; cell.textContent = 'No preflight result is available.';
+    row.append(cell); tbody.append(row);
+  } else {
+    for (const check of checks) {
+      const row = document.createElement('tr');
+      const name = document.createElement('td'), status = document.createElement('td'), detail = document.createElement('td');
+      const state = readinessStatus(check.status);
+      name.textContent = check.name || 'Unnamed check';
+      status.textContent = state;
+      status.className = `ready-${state}`;
+      detail.textContent = check.detail || '';
+      row.append(name, status, detail);
+      tbody.append(row);
+    }
+  }
+}
+function renderPaper(data){
+  const paper = data || {}, mode = paper.mode || 'UNKNOWN';
+  const set = (id, value) => { $(id).textContent = value == null || value === '' ? 'UNKNOWN' : String(value); };
+  const amount = value => value == null ? 'UNKNOWN' : `${Number(value).toFixed(4)} USDC`;
+  const badge = $('#paperBadge');
+  const modeLabel = mode === 'paper' ? 'PAPER' : mode === 'live' ? 'LIVE RUN — PAPER CONTROLS DISABLED' : mode.toUpperCase();
+  badge.textContent = mode === 'paper' ? (paper.status || 'UNKNOWN') : modeLabel;
+  badge.className = `ready-pill ${paper.status === 'RUNNING' ? 'ready-PASS' : paper.status === 'HALTED' ? 'ready-FAIL' : 'ready-UNKNOWN'}`;
+  set('#paperMode', modeLabel);
+  set('#paperStatus', paper.status ? `${paper.status}${paper.system_detail ? ` — ${paper.system_detail}` : ''}` : 'UNKNOWN');
+  set('#paperStarting', amount(paper.starting_balance));
+  set('#paperCash', amount(paper.cash));
+  set('#paperEquity', amount(paper.equity));
+  const positions = paper.positions || [];
+  set('#paperPositions', positions.length
+    ? positions.map(p => `${p.asset}: ${p.quantity}`).join(' · ')
+    : (paper.mode === 'paper' ? 'None' : 'UNKNOWN'));
+  set('#paperRealized', amount(paper.realized_pnl));
+  set('#paperUnrealized', amount(paper.unrealized_pnl));
+  set('#paperNetPnl', amount(paper.net_pnl));
+  set('#paperOpenClosed', paper.mode === 'paper'
+    ? `${paper.open_position_count || 0} open positions · ${paper.closed_trade_count || 0} closed sell fills`
+    : 'UNKNOWN');
+  const decision = paper.latest_decision;
+  set('#paperDecision', decision
+    ? `${decision.side} ${decision.asset} · ${decision.execution || 'UNKNOWN'}${decision.reason ? ` — ${decision.reason}` : ''}`
+    : 'UNKNOWN');
+  set('#paperRisk', decision ? decision.risk_status : 'UNKNOWN');
+  set('#paperLive', paper.live_trading || (mode === 'paper' ? 'OFF' : 'UNKNOWN'));
+  const error = paper.trade_log_error || '';
+  $('#paperError').textContent = error;
+  const tbody = $('#paperTrades');
+  tbody.replaceChildren();
+  const trades = paper.trades || [];
+  if (!trades.length) {
+    const row = document.createElement('tr'), cell = document.createElement('td');
+    cell.colSpan = 11;
+    cell.textContent = error || 'No simulated fills have been recorded.';
+    row.append(cell); tbody.append(row);
+  } else {
+    for (const trade of trades) {
+      const row = document.createElement('tr');
+      const values = [
+        trade.timestamp ? new Date(trade.timestamp).toLocaleString() : 'UNKNOWN',
+        trade.asset, trade.side, trade.price, trade.quantity, trade.fee,
+        trade.cash_balance, trade.equity, trade.realized_pnl, trade.unrealized_pnl,
+        `${trade.reason || JSON.stringify(trade.signal || {})} · decision=${trade.signal?.decision || 'UNKNOWN'}; Δ=${trade.signal?.difference_hz ?? 'UNKNOWN'} Hz; gate=${trade.signal?.gate_spikes ?? 'UNKNOWN'}`,
+      ];
+      for (const value of values) {
+        const cell = document.createElement('td');
+        cell.textContent = value == null ? 'UNKNOWN' : String(value);
+        row.append(cell);
+      }
+      tbody.append(row);
+    }
+  }
+  const start = $('#paperStart'), stop = $('#paperStop');
+  start.disabled = mode === 'live' || paper.status === 'RUNNING' ||
+    paper.status === 'STARTING' || paper.status === 'HALTED' || paper.stop_requested;
+  stop.disabled = mode !== 'paper' || paper.status !== 'RUNNING';
+}
+async function paperAction(action){
+  const error = $('#paperError'), start = $('#paperStart'), stop = $('#paperStop');
+  start.disabled = stop.disabled = true;
+  error.textContent = action === 'start' ? 'Starting the paper worker…' : 'Setting the emergency paper STOP…';
+  try {
+    const response = await fetch(`api/paper/${action}`, {method:'POST'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Paper action failed (HTTP ${response.status})`);
+    error.textContent = result.status || 'Paper action accepted.';
+    await poll();
+  } catch (err) {
+    error.textContent = err.message;
+    try { await poll(); } catch (_) {}
+  }
+}
+$('#paperStart').addEventListener('click', () => paperAction('start'));
+$('#paperStop').addEventListener('click', () => paperAction('stop'));
+async function refreshReadiness(){
+  const response = await fetch('readiness.json');
+  if (!response.ok) throw new Error(`Readiness request failed (HTTP ${response.status})`);
+  renderReadiness(await response.json());
+}
+async function runPreflight(){
+  const button = $('#runPreflight'), error = $('#readinessError');
+  button.disabled = true;
+  button.textContent = 'PREFLIGHT RUNNING…';
+  error.textContent = '';
+  try {
+    const response = await fetch('api/preflight', {method:'POST'});
+    const result = await response.json();
+    if (result.preflight) renderReadiness(result);
+    if (!response.ok) throw new Error(result.error || `Preflight request failed (HTTP ${response.status})`);
+  } catch (err) {
+    error.textContent = `Unable to complete preflight: ${err.message}`;
+    try { await refreshReadiness(); } catch (_) {}
+  } finally {
+    button.disabled = false;
+    button.textContent = 'RUN PREFLIGHT';
+  }
+}
+$('#runPreflight').addEventListener('click', runPreflight);
+
 setInterval(() => {
   const e = STATE && STATE.events[STATE.events.length - 1]; if (!e) return;
   const left = Math.round(e.time + 60 - Date.now() / 1000 - SKEW);
@@ -873,6 +1146,7 @@ applyTheme(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
 async function poll(){
   try {
     STATE = await fetch('state.json').then(r => r.json());
+    renderPaper(STATE.paper);
     SKEW = STATE.now ? STATE.now - Date.now() / 1000 : 0;  // viewer clock may be off
     const e = STATE.events[STATE.events.length - 1], key = (e ? e.tick : 0) + ':' + (STATE.checkpoint ? STATE.checkpoint.mtime : 0);
     if (key !== lastKey) {
@@ -897,7 +1171,11 @@ async function init(){
   prepBrain(); bindBrain();
   if (REDUCED.matches) setAuto(false);
   $('#bEyeMode').onclick = () => { eye.only = !eye.only; $('#bEyeMode').textContent = eye.only ? 'Overlay on the original image' : 'Show fly’s view only'; drawPanels(); eye.final = false; };
-  await poll(); setInterval(poll, 4000); requestAnimationFrame(loop);
+  await poll();
+  try { await refreshReadiness(); } catch (err) { $('#readinessError').textContent = `Readiness unavailable: ${err.message}`; }
+  setInterval(poll, 4000); setInterval(() => refreshReadiness().catch(err => {
+    $('#readinessError').textContent = `Readiness refresh failed: ${err.message}`;
+  }), 4000); requestAnimationFrame(loop);
 }
 init();
 </script>

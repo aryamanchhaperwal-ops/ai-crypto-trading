@@ -41,7 +41,21 @@ class StonkflyActions(ActionProvider):
     def invoke(self, args):
         p = Proposal.model_validate(args)
         plan = self.guard.plan(p.product, p.side, self.quotes)
-        plan["neural_observation"] = self.guard.l.get("observation")
+        observation = self.guard.l.get("observation") or {}
+        neural = observation.get("neural") or {}
+        plan["neural_observation"] = observation
+        plan["market_marks"] = {
+            product: str(quote.bid) for product, quote in self.quotes.items()
+        }
+        plan["signal"] = {
+            "decision": p.side,
+            "difference_hz": neural.get("difference_hz"),
+            "gate_spikes": neural.get("gate_spikes"),
+            "reason": (
+                f"Stonkfly neural decoder proposed {p.side}; "
+                "accepted only after execution risk checks."
+            ),
+        }
         plan["checkpoint"] = self.guard.l.get("checkpoint")
         plan = self.guard.l.reserve(plan, time.time())
         return self.broker.execute(plan, self.guard.before_submit)

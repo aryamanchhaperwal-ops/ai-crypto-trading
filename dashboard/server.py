@@ -1,8 +1,8 @@
-"""Stonkfly live neural dashboard (read-only).
+"""Stonkfly neural dashboard with isolated paper controls.
 
 Reads the checkpoints, events and ledger that `python -m stonkfly run` writes into
-a run directory and serves them to index.html. It never writes to the run and
-refuses every non-GET request.
+a run directory and serves them to index.html. Its local paper endpoints start
+the existing paper worker or latch its STOP file; it never invokes live execution.
 
 Usage (from the repository root):
     python dashboard/server.py [RUN_DIR]        # default: runs/paper
@@ -13,13 +13,18 @@ Environment variables: see README.md ("Dashboard configuration").
 import json
 import re
 import os
+import ipaddress
+import subprocess
 import sqlite3
 from decimal import Decimal
+from datetime import datetime
 import sys
 import time
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -32,6 +37,9 @@ RUN = Path(
 PORT = int(os.environ.get("PORT", "8765"))
 # Localhost by default. Set HOST=0.0.0.0 to open it to your LAN (read-only, no auth).
 HOST = os.environ.get("HOST", "127.0.0.1")
+PREFLIGHT_RUN = ROOT / "runs" / "live"
+PREFLIGHT_FILE = PREFLIGHT_RUN / "preflight.json"
+PREFLIGHT_LOCK = threading.Lock()
 CACHE = Path(os.environ.get("STONKFLY_VIZ_CACHE", HERE / "cache"))
 ANIM_DIR = Path(os.environ.get("STONKFLY_ANIM", HERE / "anim"))
 # Optional links to other dashboards, e.g. "BTC fly:8765,PEPE fly:8766".
@@ -202,10 +210,322 @@ def ledger():
         db.close()
         return {
             k: meta.get(k)
-            for k in ["mode", "tick", "cash", "positions", "initial_cash", "halted"]
+            for k in [
+                "mode",
+                "tick",
+                "cash",
+                "positions",
+                "initial_cash",
+                "halted",
+                "cost_basis",
+                "realized_pnl",
+            ]
         }
     except sqlite3.Error:
         return {}
+
+
+def paper_portfolio(events, ledger_state):
+    mode = ledger_state.get("mode", "UNKNOWN")
+    runtime = runtime_readiness(RUN)
+    active = worker_active(RUN)
+    if mode != "paper":
+        status = (
+            "UNAVAILABLE"
+            if mode == "live"
+            else "STARTING"
+            if active is True
+            else "UNKNOWN"
+        )
+        return {
+            "mode": mode,
+            "live_trading": "UNAVAILABLE" if mode == "live" else "UNKNOWN",
+            "status": status,
+            "system_detail": runtime.get("system_detail"),
+            "starting_balance": None,
+            "cash": None,
+            "positions": [],
+            "equity": None,
+            "realized_pnl": None,
+            "unrealized_pnl": None,
+            "net_pnl": None,
+            "latest_decision": None,
+            "open_position_count": None,
+            "closed_trade_count": None,
+            "trades": [],
+            "trade_log_error": None,
+            "stop_requested": (RUN / "STOP").exists(),
+        }
+    elif ledger_state.get("halted") or (RUN / "STOP").exists():
+        status = "HALTED"
+    elif active is True:
+        status = "RUNNING"
+    elif active is False:
+        status = "STOPPED"
+    else:
+        status = "UNKNOWN"
+
+    paper_trades = []
+    log_error = None
+    closed_trade_count = 0
+    realized = Decimal(str(ledger_state.get("realized_pnl") or "0"))
+    cost_basis = ledger_state.get("cost_basis") or {}
+    try:
+        with sqlite3.connect(f"file:{RUN / 'ledger.sqlite'}?mode=ro", uri=True) as db:
+            rows = db.execute(
+                "SELECT timestamp,asset,side,price,quantity,fee,signal,reason,"
+                "cash_balance,realized_pnl,cumulative_realized_pnl,"
+                "unrealized_pnl,equity FROM paper_trades "
+                "ORDER BY timestamp DESC LIMIT 100"
+            ).fetchall()
+            closed_trade_count = db.execute(
+                "SELECT COUNT(*) FROM paper_trades WHERE side='SELL'"
+            ).fetchone()[0]
+        paper_trades = [
+            {
+                "timestamp": row[0],
+                "asset": row[1],
+                "side": row[2],
+                "price": row[3],
+                "quantity": row[4],
+                "fee": row[5],
+                "signal": json.loads(row[6]),
+                "reason": row[7],
+                "cash_balance": row[8],
+                "realized_pnl": row[9],
+                "cumulative_realized_pnl": row[10],
+                "unrealized_pnl": row[11],
+                "equity": row[12],
+            }
+            for row in rows
+        ]
+    except sqlite3.Error as exc:
+        log_error = f"Paper trade log unavailable ({type(exc).__name__})"
+
+    positions = ledger_state.get("positions") or {}
+    open_positions = [
+        {"asset": asset, "quantity": str(quantity)}
+        for asset, quantity in sorted(positions.items())
+        if Decimal(str(quantity)) > 0
+    ]
+    marks = {}
+    for event in events:
+        marks[event["product"]] = Decimal(str(event["bid"]))
+    cash = Decimal(str(ledger_state.get("cash") or "0"))
+    basis = {k: Decimal(str(v)) for k, v in cost_basis.items()}
+    equity = cash + sum(
+        (
+            Decimal(str(quantity))
+            * marks.get(
+                asset,
+                basis.get(asset, Decimal(0)) / Decimal(str(quantity))
+                if Decimal(str(quantity))
+                else Decimal(0),
+            )
+            for asset, quantity in positions.items()
+        ),
+        Decimal(0),
+    )
+    if events:
+        equity = Decimal(str(events[-1]["equity"]))
+    initial = Decimal(str(ledger_state.get("initial_cash") or "0"))
+    net_pnl = equity - initial
+    latest = events[-1] if events else None
+    decision = None
+    if latest:
+        decision = {
+            "timestamp": latest["time"],
+            "asset": latest["product"],
+            "side": latest["side"],
+            "difference_hz": latest["diff_hz"],
+            "risk_status": (
+                "PASS"
+                if latest["execution"] == "FILLED"
+                else "BLOCKED"
+                if latest["execution"] == "VETO"
+                else "NOT APPLICABLE"
+            ),
+            "execution": latest["execution"],
+            "reason": latest["reason"],
+        }
+    return {
+        "mode": mode,
+        "live_trading": "OFF" if mode == "paper" else "UNAVAILABLE" if mode == "live" else "UNKNOWN",
+        "status": status,
+        "system_detail": runtime.get("system_detail"),
+        "starting_balance": ledger_state.get("initial_cash"),
+        "cash": ledger_state.get("cash"),
+        "positions": open_positions,
+        "equity": str(equity),
+        "realized_pnl": str(realized),
+        "unrealized_pnl": str(net_pnl - realized),
+        "net_pnl": str(net_pnl),
+        "latest_decision": decision,
+        "open_position_count": len(open_positions),
+        "closed_trade_count": closed_trade_count,
+        "trades": paper_trades,
+        "trade_log_error": log_error,
+        "stop_requested": (RUN / "STOP").exists(),
+    }
+
+
+def worker_active(run):
+    path = run / "worker.lock"
+    if not path.exists():
+        return False
+    try:
+        with path.open("r+b") as lock:
+            if os.name == "nt":
+                import msvcrt
+
+                lock.seek(0)
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError as exc:
+                    if exc.errno in (13, 36, 10013, 10035):
+                        return True
+                    return None
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return True
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return None
+
+
+def runtime_readiness(run):
+    db_path = run / "ledger.sqlite"
+    if not db_path.exists():
+        return {
+            "system_status": "NOT STARTED",
+            "mode": "UNKNOWN",
+            "model": {
+                "name": "MaleCNS v1.0",
+                "loaded": False,
+                "status": "UNKNOWN",
+                "detail": "No run ledger is available.",
+            },
+        }
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        meta = {k: json.loads(v) for k, v in db.execute("SELECT key,value FROM meta")}
+        db.close()
+    except (sqlite3.Error, ValueError, json.JSONDecodeError):
+        return {
+            "system_status": "UNKNOWN",
+            "mode": "UNKNOWN",
+            "model": {
+                "name": "MaleCNS v1.0",
+                "loaded": None,
+                "status": "UNKNOWN",
+                "detail": "Run ledger could not be read.",
+            },
+        }
+    active = worker_active(run)
+    marker = None
+    if active is True:
+        try:
+            marker = json.loads((run / "worker.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            marker = None
+    stopped = bool(meta.get("halted")) or (run / "STOP").exists()
+    if stopped:
+        status = "HALTED"
+        halt_detail = meta.get("halted") or "STOP file is present"
+        if halt_detail == "RuntimeError":
+            try:
+                diagnostic = json.loads((run / "error.json").read_text())
+                halt_detail = diagnostic.get("reason") or halt_detail
+            except (OSError, json.JSONDecodeError):
+                pass
+        detail = str(halt_detail)
+    elif active is True and marker:
+        status = "RUNNING"
+        detail = "Live worker holds the run lock and reports a loaded model."
+    elif active is True:
+        status = "PREFLIGHTING"
+        detail = "A process owns the run lock; no active engine marker is available."
+    elif active is None:
+        status = "UNKNOWN"
+        detail = "Could not determine whether the run lock is held."
+    else:
+        status = "STOPPED"
+        detail = "No worker currently holds the run lock."
+    checkpoints = sorted(
+        run.glob("brain-*.npz"), key=lambda p: p.stat().st_mtime_ns
+    )
+    if active is True and marker and marker.get("model_loaded") is True:
+        model = {
+            "name": marker.get("model", "MaleCNS v1.0"),
+            "loaded": True,
+            "status": "LOADED",
+            "detail": "The active engine reports its model loaded.",
+        }
+    elif active is True:
+        model = {
+            "name": "MaleCNS v1.0",
+            "loaded": False,
+            "status": "NOT LOADED",
+            "detail": "An existing preflight or engine startup currently owns this run.",
+        }
+    elif checkpoints:
+        model = {
+            "name": "MaleCNS v1.0",
+            "loaded": False,
+            "status": "CHECKPOINT AVAILABLE",
+            "detail": "A checkpoint exists, but no active worker has it loaded.",
+        }
+    else:
+        model = {
+            "name": "MaleCNS v1.0",
+            "loaded": False,
+            "status": "NOT LOADED",
+            "detail": "No model checkpoint is available in this run.",
+        }
+    return {
+        "system_status": status,
+        "system_detail": detail,
+        "mode": meta.get("mode", "UNKNOWN"),
+        "model": model,
+    }
+
+
+def readiness_state():
+    try:
+        report = json.loads(PREFLIGHT_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        report = None
+    live_runtime = runtime_readiness(PREFLIGHT_RUN)
+    model = (report or {}).get("values", {}).get("model", {})
+    if model.get("loaded") is True and live_runtime["model"].get("loaded") is not True:
+        live_runtime["model"] = {
+            "name": model.get("name", "MaleCNS v1.0"),
+            "loaded": True,
+            "status": "LOADED (NO-TRADE PREFLIGHT)",
+            "detail": (
+                "The verified MaleCNS model and decoder loaded successfully in the "
+                "no-trade preflight. No live worker is running."
+            ),
+        }
+    return {
+        "runtime": live_runtime,
+        "preflight": report,
+        "live_trading": (
+            "ON"
+            if live_runtime["system_status"] == "RUNNING"
+            and live_runtime["mode"] == "live"
+            and live_runtime["model"]["loaded"] is True
+            else "OFF"
+        ),
+        "dashboard_run_mode": runtime_readiness(RUN)["mode"],
+    }
 
 
 def trade_pnl():
@@ -269,16 +589,18 @@ def state():
                     "mean_efficacy": nr["memory"]["mean_efficacy"],
                     "min_efficacy": nr["memory"]["minimum_efficacy"],
                     "execution": r["execution"].get("status"),
-                    "reason": r["execution"].get("reason"),
+                    "reason": r["execution"].get("reason") or r.get("signal_reason"),
                     "trade_pnl": pnl.get(f"{r['execution'].get('base')}|{r['execution'].get('quote')}"),
                 }
             )
     cp = checkpoint()
+    ledger_state = ledger()
     return {
         "run": RUN.name,
         "now": time.time(),
         "events": events,
-        "ledger": ledger(),
+        "ledger": ledger_state,
+        "paper": paper_portfolio(events, ledger_state),
         "stopped": (RUN / "STOP").exists(),
         "checkpoint": None
         if cp is None
@@ -286,9 +608,44 @@ def state():
     }
 
 
+def _is_loopback_name(hostname):
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _failed_preflight(detail):
+    return {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "result": "FAIL",
+        "checks": [{"name": "Existing Coinbase preflight", "status": "FAIL", "detail": detail}],
+        "values": {
+            "mode": "live preflight-only",
+            "live_trading": "OFF",
+            "orders_submitted": 0,
+        },
+        "orders_submitted": 0,
+    }
+
+
+def _write_preflight(report):
+    PREFLIGHT_RUN.mkdir(parents=True, exist_ok=True)
+    temp = PREFLIGHT_FILE.with_suffix(".json.partial")
+    temp.write_text(json.dumps(report, indent=2) + "\n")
+    temp.replace(PREFLIGHT_FILE)
+
+
+def _report_timestamp(report):
+    try:
+        return datetime.fromisoformat(report["timestamp"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
 class Handler(BaseHTTPRequestHandler):
-    def send(self, body, ctype, cache=False):
-        self.send_response(200)
+    def send(self, body, ctype, cache=False, status=200):
+        self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
@@ -345,6 +702,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(TYPE.tobytes(), "application/octet-stream", True)
         if route == "/state.json":
             return self.send(json.dumps(state()).encode(), "application/json")
+        if route == "/readiness.json":
+            return self.send(
+                json.dumps(readiness_state()).encode(), "application/json"
+            )
         if route == "/counts.bin":
             cp = checkpoint()
             return self.send(cp["counts"] if cp else b"", "application/octet-stream")
@@ -355,11 +716,206 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_range(ANIM_DIR / f"{m.group(1)}.mp4", "video/mp4")
         self.send_error(404)
 
-    # Read-only dashboard: refuse every method that could change state.
+    def do_POST(self):
+        route = self.path.split("?")[0]
+        if route not in ("/api/preflight", "/api/paper/start", "/api/paper/stop"):
+            return self.send_error(404)
+        try:
+            address = ipaddress.ip_address(self.client_address[0])
+        except ValueError:
+            return self.send_error(403, "Actions are restricted to localhost")
+        if not address.is_loopback:
+            return self.send_error(403, "Actions are restricted to localhost")
+        origin = self.headers.get("Origin")
+        if origin:
+            try:
+                parsed = urlsplit(origin)
+                valid_port = parsed.port == PORT
+            except ValueError:
+                valid_port = False
+                parsed = None
+            if (
+                parsed is None
+                or parsed.scheme not in ("http", "https")
+                or not valid_port
+                or not parsed.hostname
+                or not (
+                    parsed.hostname == "localhost"
+                    or _is_loopback_name(parsed.hostname)
+                )
+            ):
+                return self.send_error(403, "Invalid local action origin")
+        if route == "/api/paper/start":
+            if RUN.resolve() == PREFLIGHT_RUN.resolve():
+                return self.send(
+                    b'{"error":"The live run directory cannot be started in paper mode"}',
+                    "application/json",
+                    status=409,
+                )
+            run_ledger = ledger()
+            if (RUN / "ledger.sqlite").exists() and run_ledger.get("mode") != "paper":
+                return self.send(
+                    b'{"error":"Refusing to start paper mode in a non-paper or unreadable run directory"}',
+                    "application/json",
+                    status=409,
+                )
+            active = worker_active(RUN)
+            if active is None:
+                return self.send(
+                    b'{"error":"Could not verify the paper worker lock"}',
+                    "application/json",
+                    status=503,
+                )
+            if active:
+                return self.send(
+                    b'{"error":"A worker already owns this run directory"}',
+                    "application/json",
+                    status=409,
+                )
+            if (RUN / "STOP").exists():
+                return self.send(
+                    b'{"error":"Emergency STOP is set; review the run and clear STOP explicitly before restarting"}',
+                    "application/json",
+                    status=409,
+                )
+            if run_ledger.get("halted"):
+                return self.send(
+                    b'{"error":"Paper ledger is halted and requires operator review"}',
+                    "application/json",
+                    status=409,
+                )
+            try:
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "stonkfly",
+                        "run",
+                        "--paper",
+                        "--out",
+                        str(RUN),
+                    ],
+                    cwd=ROOT,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                )
+            except OSError as exc:
+                return self.send(
+                    json.dumps(
+                        {"error": f"Could not start the paper worker ({type(exc).__name__})"}
+                    ).encode(),
+                    "application/json",
+                    status=500,
+                )
+            return self.send(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "mode": "paper",
+                        "status": "STARTING",
+                        "run": str(RUN),
+                        "command": [
+                            sys.executable,
+                            "-m",
+                            "stonkfly",
+                            "run",
+                            "--paper",
+                            "--out",
+                            str(RUN),
+                        ],
+                        "live_trading": "OFF",
+                    }
+                ).encode(),
+                "application/json",
+                status=202,
+            )
+        if route == "/api/paper/stop":
+            run_ledger = ledger()
+            if run_ledger.get("mode") != "paper":
+                return self.send(
+                    b'{"error":"Refusing to stop a run that is not in paper mode"}',
+                    "application/json",
+                    status=409,
+                )
+            active = worker_active(RUN)
+            if active is not True:
+                return self.send(
+                    b'{"error":"No active paper worker owns this run directory"}',
+                    "application/json",
+                    status=409,
+                )
+            (RUN / "STOP").touch()
+            return self.send(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "mode": "paper",
+                        "status": "STOP REQUESTED",
+                        "run": str(RUN),
+                        "live_trading": "OFF",
+                    }
+                ).encode(),
+                "application/json",
+            )
+        if not PREFLIGHT_LOCK.acquire(blocking=False):
+            return self.send(
+                b'{"error":"A preflight is already running"}',
+                "application/json",
+                status=409,
+            )
+        try:
+            started = time.time()
+            try:
+                process = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "stonkfly",
+                        "run",
+                        "--live",
+                        "--preflight-only",
+                    ],
+                    cwd=ROOT,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=120,
+                    check=False,
+                )
+                if process.returncode and not PREFLIGHT_FILE.exists():
+                    raise RuntimeError("Preflight exited without writing a report")
+            except subprocess.TimeoutExpired:
+                report = _failed_preflight(
+                    "Preflight timed out after 120 seconds"
+                )
+                _write_preflight(report)
+            except Exception as exc:
+                report = _failed_preflight(
+                    f"Existing preflight command failed ({type(exc).__name__})"
+                )
+                _write_preflight(report)
+            try:
+                report = json.loads(PREFLIGHT_FILE.read_text())
+            except (OSError, json.JSONDecodeError):
+                report = _failed_preflight("Preflight report is unavailable")
+                _write_preflight(report)
+            if _report_timestamp(report) < started:
+                report = _failed_preflight(
+                    "Preflight did not produce a fresh result"
+                )
+                _write_preflight(report)
+            response = readiness_state()
+            return self.send(json.dumps(response).encode(), "application/json")
+        finally:
+            PREFLIGHT_LOCK.release()
+
+    # Other non-GET methods cannot modify records or invoke any trading action.
     def refuse(self):
         self.send_error(405, "Read-only dashboard")
 
-    do_POST = do_PUT = do_PATCH = do_DELETE = refuse
+    do_PUT = do_PATCH = do_DELETE = refuse
 
     def log_message(self, *args):
         pass

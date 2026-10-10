@@ -4,6 +4,7 @@ import contextlib
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import D
@@ -22,6 +23,15 @@ class Ledger:
         self.db.execute(
             "CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY,status TEXT NOT NULL,created REAL NOT NULL,plan TEXT NOT NULL,exchange_id TEXT,settlement TEXT)"
         )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS paper_trades ("
+            "id TEXT PRIMARY KEY,timestamp TEXT NOT NULL,asset TEXT NOT NULL,"
+            "side TEXT NOT NULL,price TEXT NOT NULL,quantity TEXT NOT NULL,"
+            "fee TEXT NOT NULL,signal TEXT NOT NULL,reason TEXT NOT NULL,"
+            "cash_balance TEXT NOT NULL,realized_pnl TEXT NOT NULL,"
+            "cumulative_realized_pnl TEXT NOT NULL,unrealized_pnl TEXT NOT NULL,"
+            "equity TEXT NOT NULL)"
+        )
         if self.get("settings") is None:
             with self.transaction():
                 for k, v in {
@@ -35,12 +45,45 @@ class Ledger:
                     "checkpoint": None,
                     "halted": None,
                     "last_attempt": 0,
+                    "cost_basis": {},
+                    "realized_pnl": "0",
                 }.items():
                     self.put(k, v)
         elif self.get("settings") != settings.signature() or self.get("mode") != mode:
             raise RuntimeError(
                 "Run settings/mode mismatch; use a separate paper run directory"
             )
+        if self.get("cost_basis") is None or self.get("realized_pnl") is None:
+            self._rebuild_accounting()
+
+    def _rebuild_accounting(self):
+        basis = {}
+        quantities = {}
+        realized = D(0)
+        rows = self.db.execute(
+            "SELECT plan,settlement FROM orders"
+            " WHERE status='SETTLED' AND settlement IS NOT NULL ORDER BY created"
+        ).fetchall()
+        for plan_json, settlement_json in rows:
+            plan, settlement = json.loads(plan_json), json.loads(settlement_json)
+            product = plan["product"]
+            quantity = D(settlement["base"])
+            quote = D(settlement["quote"])
+            fee = D(settlement["fee"])
+            held = D(basis.get(product, "0"))
+            owned = quantities.get(product, D(0))
+            if plan["side"] == "BUY":
+                basis[product] = str(held + quote + fee)
+                quantities[product] = owned + quantity
+            elif owned > 0:
+                sold = min(quantity, owned)
+                sold_basis = held * sold / owned
+                realized += quote - fee - sold_basis
+                basis[product] = str(held - sold_basis)
+                quantities[product] = owned - sold
+        with self.transaction():
+            self.put("cost_basis", basis)
+            self.put("realized_pnl", str(realized))
 
     @contextlib.contextmanager
     def transaction(self):
@@ -139,6 +182,11 @@ class Ledger:
             p = json.loads(row[1])
             positions = self.positions
             held = positions.get(p["product"], D(0))
+            cost_basis = {
+                k: D(v) for k, v in (self.get("cost_basis") or {}).items()
+            }
+            held_basis = cost_basis.get(p["product"], D(0))
+            realized = D(0)
             cash = self.cash
             if base > D(p["base_size"]):
                 raise RuntimeError("Fill exceeds requested quantity")
@@ -147,19 +195,81 @@ class Ledger:
                     raise RuntimeError("Buy fill exceeded limit price")
                 cash -= quote + fee
                 positions[p["product"]] = held + base
+                cost_basis[p["product"]] = held_basis + quote + fee
             else:
                 if quote + D(".00000001") < D(p["limit_price"]) * base:
                     raise RuntimeError("Sell fill below limit price")
+                if base > held or held <= 0 or held_basis < 0:
+                    raise RuntimeError("Fill exceeds owned position or cost basis")
+                sold_basis = held_basis * base / held
+                realized = quote - fee - sold_basis
+                cost_basis[p["product"]] = held_basis - sold_basis
                 cash += quote - fee
                 positions[p["product"]] = held - base
             if cash < 0 or positions[p["product"]] < 0:
                 raise RuntimeError("Fill exceeds reserved account funds")
+            cumulative_realized = D(self.get("realized_pnl") or "0") + realized
+            marks = {
+                k: D(v) for k, v in p.get("market_marks", {}).items()
+            }
+            marks.setdefault(p["product"], D(p["observed_bid"]))
+            unrealized = sum(
+                (
+                    quantity
+                    * marks.get(
+                        product,
+                        cost_basis.get(product, D(0)) / quantity
+                        if quantity
+                        else D(0),
+                    )
+                    - cost_basis.get(product, D(0))
+                    for product, quantity in positions.items()
+                ),
+                D(0),
+            )
+            equity = cash + sum(
+                (
+                    quantity
+                    * marks.get(
+                        product,
+                        cost_basis.get(product, D(0)) / quantity
+                        if quantity
+                        else D(0),
+                    )
+                    for product, quantity in positions.items()
+                ),
+                D(0),
+            )
             self.put("cash", str(cash))
             self.put("positions", {k: str(v) for k, v in positions.items()})
+            self.put("cost_basis", {k: str(v) for k, v in cost_basis.items()})
+            self.put("realized_pnl", str(cumulative_realized))
             self.db.execute(
                 "UPDATE orders SET status='SETTLED',settlement=? WHERE id=?",
                 (json.dumps(payload), cid),
             )
+            if self.get("mode") == "paper":
+                signal = p.get("signal", {"decision": p["side"]})
+                reason = signal.get("reason", f"Stonkfly neural signal: {p['side']}")
+                self.db.execute(
+                    "INSERT INTO paper_trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        cid,
+                        datetime.now(timezone.utc).isoformat(),
+                        p["product"],
+                        p["side"],
+                        str(quote / base if base else D(0)),
+                        str(base),
+                        str(fee),
+                        json.dumps(signal, allow_nan=False),
+                        reason,
+                        str(cash),
+                        str(realized),
+                        str(cumulative_realized),
+                        str(unrealized),
+                        str(equity),
+                    ),
+                )
             if fee > D(p["fee_ceiling"]):
                 self.halt(
                     "Actual fee exceeded preview ceiling; fill recorded, further orders stopped"

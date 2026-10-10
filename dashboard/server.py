@@ -407,7 +407,7 @@ def runtime_readiness(run):
             "system_status": "NOT STARTED",
             "mode": "UNKNOWN",
             "model": {
-                "name": "MaleCNS v1.0",
+                "name": "Six-Agent Team",
                 "loaded": False,
                 "status": "UNKNOWN",
                 "detail": "No run ledger is available.",
@@ -422,7 +422,7 @@ def runtime_readiness(run):
             "system_status": "UNKNOWN",
             "mode": "UNKNOWN",
             "model": {
-                "name": "MaleCNS v1.0",
+                "name": "Six-Agent Team",
                 "loaded": None,
                 "status": "UNKNOWN",
                 "detail": "Run ledger could not be read.",
@@ -463,28 +463,28 @@ def runtime_readiness(run):
     )
     if active is True and marker and marker.get("model_loaded") is True:
         model = {
-            "name": marker.get("model", "MaleCNS v1.0"),
+            "name": marker.get("model", "Six-Agent Team"),
             "loaded": True,
             "status": "LOADED",
             "detail": "The active engine reports its model loaded.",
         }
     elif active is True:
         model = {
-            "name": "MaleCNS v1.0",
+            "name": "Six-Agent Team",
             "loaded": False,
             "status": "NOT LOADED",
             "detail": "An existing preflight or engine startup currently owns this run.",
         }
     elif checkpoints:
         model = {
-            "name": "MaleCNS v1.0",
+            "name": "Six-Agent Team",
             "loaded": False,
             "status": "CHECKPOINT AVAILABLE",
             "detail": "A checkpoint exists, but no active worker has it loaded.",
         }
     else:
         model = {
-            "name": "MaleCNS v1.0",
+            "name": "Six-Agent Team",
             "loaded": False,
             "status": "NOT LOADED",
             "detail": "No model checkpoint is available in this run.",
@@ -506,11 +506,11 @@ def readiness_state():
     model = (report or {}).get("values", {}).get("model", {})
     if model.get("loaded") is True and live_runtime["model"].get("loaded") is not True:
         live_runtime["model"] = {
-            "name": model.get("name", "MaleCNS v1.0"),
+            "name": model.get("name", "Six-Agent Team"),
             "loaded": True,
             "status": "LOADED (NO-TRADE PREFLIGHT)",
             "detail": (
-                "The verified MaleCNS model and decoder loaded successfully in the "
+                "The verified Six-Agent Team and decoder loaded successfully in the "
                 "no-trade preflight. No live worker is running."
             ),
         }
